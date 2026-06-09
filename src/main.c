@@ -10,7 +10,7 @@ int main(int argc, char **argv) {
 
     if (!parse_arguments(argc, argv, &opts)) {
         if (argc < 2) {
-            fprintf(stderr, "Nano C Compiler (ncc) driver - C11 version\n");
+            fprintf(stderr, "NeoC Compiler (ncc) driver - C11 version\n");
             fprintf(stderr, "Usage:\n");
             fprintf(stderr, "  Compile: %s [options] <source-files> -o <output-binary>\n", argv[0]);
             fprintf(stderr, "  Run (JIT): %s [options] <source-files> [--] [program-arguments]\n", argv[0]);
