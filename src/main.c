@@ -1,6 +1,7 @@
 #include "driver.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 int main(int argc, char **argv) {
@@ -18,6 +19,47 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // Preprocess any source files that start with shebang "#!"
+    char **temp_shebang_files = calloc(opts.source_count, sizeof(char *));
+    for (int i = 0; i < opts.source_count; i++) {
+        const char *src = opts.source_files[i];
+        if (strcmp(src, "-") == 0) continue;
+
+        FILE *fp = fopen(src, "r");
+        if (!fp) continue;
+
+        char first_two[2] = {0};
+        size_t read_bytes = fread(first_two, 1, 2, fp);
+        if (read_bytes == 2 && first_two[0] == '#' && first_two[1] == '!') {
+            // It has a shebang! Strip it by copying to a temp file
+            char tmp_shebang[PATH_MAX];
+            snprintf(tmp_shebang, sizeof(tmp_shebang), "./.ncc_tmp_shebang_XXXXXX");
+            int fd = mkstemp(tmp_shebang);
+            if (fd != -1) {
+                close(fd);
+                char tmp_shebang_ext[PATH_MAX];
+                snprintf(tmp_shebang_ext, sizeof(tmp_shebang_ext), "%s%s", tmp_shebang, is_cpp_source(src) ? ".cpp" : ".c");
+                if (rename(tmp_shebang, tmp_shebang_ext) == 0) {
+                    FILE *out_fp = fopen(tmp_shebang_ext, "w");
+                    if (out_fp) {
+                        char line[4096];
+                        // Skip shebang line but output a newline to preserve error line numbering
+                        if (fgets(line, sizeof(line), fp)) {
+                            fprintf(out_fp, "\n");
+                        }
+                        while (fgets(line, sizeof(line), fp)) {
+                            fputs(line, out_fp);
+                        }
+                        fclose(out_fp);
+                        opts.source_files[i] = strdup(tmp_shebang_ext);
+                        temp_shebang_files[i] = opts.source_files[i];
+                    }
+                }
+            }
+        }
+        fclose(fp);
+    }
+
     // If one of the source files is "-", we read from stdin and write to a temp file
     char tmp_stdin_path[PATH_MAX] = {0};
     bool has_stdin_source = false;
@@ -33,6 +75,13 @@ int main(int argc, char **argv) {
         int fd = mkstemp(tmp_base);
         if (fd == -1) {
             perror("Error: Failed to create temporary file for stdin");
+            for (int i = 0; i < opts.source_count; i++) {
+                if (temp_shebang_files[i]) {
+                    unlink(temp_shebang_files[i]);
+                    free(temp_shebang_files[i]);
+                }
+            }
+            free(temp_shebang_files);
             options_free(&opts);
             return 1;
         }
@@ -42,6 +91,13 @@ int main(int argc, char **argv) {
         if (rename(tmp_base, tmp_stdin_path) != 0) {
             perror("Error: Failed to rename temporary file for stdin");
             unlink(tmp_base);
+            for (int i = 0; i < opts.source_count; i++) {
+                if (temp_shebang_files[i]) {
+                    unlink(temp_shebang_files[i]);
+                    free(temp_shebang_files[i]);
+                }
+            }
+            free(temp_shebang_files);
             options_free(&opts);
             return 1;
         }
@@ -50,6 +106,13 @@ int main(int argc, char **argv) {
         if (!tmp_fp) {
             perror("Error: Failed to open temporary file for stdin");
             unlink(tmp_stdin_path);
+            for (int i = 0; i < opts.source_count; i++) {
+                if (temp_shebang_files[i]) {
+                    unlink(temp_shebang_files[i]);
+                    free(temp_shebang_files[i]);
+                }
+            }
+            free(temp_shebang_files);
             options_free(&opts);
             return 1;
         }
@@ -78,6 +141,13 @@ int main(int argc, char **argv) {
     if (!compiler) {
         fprintf(stderr, "Error: No suitable C/C++ compiler found in PATH\n");
         if (has_stdin_source) unlink(tmp_stdin_path);
+        for (int i = 0; i < opts.source_count; i++) {
+            if (temp_shebang_files[i]) {
+                unlink(temp_shebang_files[i]);
+                free(temp_shebang_files[i]);
+            }
+        }
+        free(temp_shebang_files);
         options_free(&opts);
         return 1;
     }
@@ -93,6 +163,13 @@ int main(int argc, char **argv) {
         if (fd == -1) {
             perror("Error: Failed to create temporary file");
             if (has_stdin_source) unlink(tmp_stdin_path);
+            for (int i = 0; i < opts.source_count; i++) {
+                if (temp_shebang_files[i]) {
+                    unlink(temp_shebang_files[i]);
+                    free(temp_shebang_files[i]);
+                }
+            }
+            free(temp_shebang_files);
             options_free(&opts);
             return 1;
         }
@@ -108,6 +185,15 @@ int main(int argc, char **argv) {
     if (has_stdin_source) {
         unlink(tmp_stdin_path);
     }
+    // Clean up shebang files if any
+    for (int i = 0; i < opts.source_count; i++) {
+        if (temp_shebang_files[i]) {
+            unlink(temp_shebang_files[i]);
+            free(temp_shebang_files[i]);
+        }
+    }
+    free(temp_shebang_files);
+
     if (compile_code != 0) {
         cleanup_temp_file();
         options_free(&opts);

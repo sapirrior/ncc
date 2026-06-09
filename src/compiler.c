@@ -70,6 +70,7 @@ int compile_sources(const Options *opts, const char *compiler, const char *effec
         }
     }
 
+
     // Check if user specified optimization
     bool has_opt_flag = false;
     for (int i = 0; i < opts->flags_count; i++) {
