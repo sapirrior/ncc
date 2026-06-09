@@ -3,6 +3,8 @@
 #include "parser.h"
 #include "codegen.h"
 #include <stdarg.h>
+#include <dlfcn.h>
+#include <unistd.h>
 
 void error(const char *fmt, ...) {
     va_list ap;
@@ -96,23 +98,88 @@ int main(int argc, char **argv) {
 
     ASTNode *ast = parse(tokens);
 
-    FILE *out = stdout;
+    int exit_code = 0;
+
     if (output_path) {
-        out = fopen(output_path, "w");
-        if (!out) {
-            error("Cannot open output file: %s", output_path);
+        // Compile-to-file mode
+        const char *ext = strrchr(output_path, '.');
+        bool is_assembly = ext && strcmp(ext, ".s") == 0;
+
+        if (is_assembly) {
+            FILE *out = fopen(output_path, "w");
+            if (!out) {
+                error("Cannot open output file: %s", output_path);
+            }
+            generate_code(ast, out);
+            fclose(out);
+        } else {
+            // Compile to temporary assembly first
+            const char *tmp_assembly = ".ncc_tmp.s";
+            FILE *out = fopen(tmp_assembly, "w");
+            if (!out) {
+                error("Cannot open temporary assembly file");
+            }
+            generate_code(ast, out);
+            fclose(out);
+
+            // Invoke clang to assemble/link to target binary
+            char cmd[512];
+            snprintf(cmd, sizeof(cmd), "clang %s -o %s", tmp_assembly, output_path);
+            int status = system(cmd);
+            unlink(tmp_assembly);
+
+            if (status != 0) {
+                error("Assembly/linking failed with status %d", status);
+            }
         }
-    }
+    } else {
+        // JIT (Run-in-memory) mode
+        const char *tmp_assembly = ".ncc_tmp.s";
+        const char *tmp_shared = "./.ncc_tmp.so";
 
-    generate_code(ast, out);
-
-    if (output_path) {
+        FILE *out = fopen(tmp_assembly, "w");
+        if (!out) {
+            error("Cannot open temporary assembly file");
+        }
+        generate_code(ast, out);
         fclose(out);
+
+        // Compile to a temporary shared library
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd), "clang -shared -fPIC %s -o %s", tmp_assembly, tmp_shared);
+        int status = system(cmd);
+        unlink(tmp_assembly);
+
+        if (status != 0) {
+            error("Assembly/linking to shared library failed with status %d", status);
+        }
+
+        // Dynamically load the library
+        void *handle = dlopen(tmp_shared, RTLD_NOW);
+        if (!handle) {
+            unlink(tmp_shared);
+            error("Failed to load JIT library: %s", dlerror());
+        }
+
+        // Look up main
+        int (*main_fn)(void) = dlsym(handle, "main");
+        if (!main_fn) {
+            dlclose(handle);
+            unlink(tmp_shared);
+            error("JIT library missing 'main' symbol: %s", dlerror());
+        }
+
+        // Execute main in memory
+        exit_code = main_fn();
+
+        // Cleanup
+        dlclose(handle);
+        unlink(tmp_shared);
     }
 
     free_ast(ast);
     free_tokens(tokens);
     free(source);
 
-    return 0;
+    return exit_code;
 }
