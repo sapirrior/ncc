@@ -13,3 +13,4 @@ tests/*.out
 # Temporary JIT/run artifacts
 .ncc_tmp*
 tests/*.bin
+.git/
