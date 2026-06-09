@@ -1,0 +1,11 @@
+# Compiled compiler binary
+/ncc
+
+# Compiled test outputs and temporary assembly files
+tests/*.s
+tests/*.out
+
+# Backup and temp files
+*~
+*.swp
+.DS_Store
