@@ -10,6 +10,74 @@ static Token *new_token(TokenType type, const char *value, int line, int col) {
     return tok;
 }
 
+typedef struct Macro {
+    char *name;
+    char *value;
+    bool in_expansion;
+    struct Macro *next;
+} Macro;
+
+static Macro *macros = NULL;
+
+static void add_macro(const char *name, const char *value) {
+    for (Macro *m = macros; m; m = m->next) {
+        if (strcmp(m->name, name) == 0) {
+            free(m->value);
+            m->value = xstrdup(value);
+            return;
+        }
+    }
+    Macro *m = xmalloc(sizeof(Macro));
+    m->name = xstrdup(name);
+    m->value = xstrdup(value);
+    m->in_expansion = false;
+    m->next = macros;
+    macros = m;
+}
+
+static Macro *find_macro(const char *name) {
+    for (Macro *m = macros; m; m = m->next) {
+        if (strcmp(m->name, name) == 0) {
+            return m;
+        }
+    }
+    return NULL;
+}
+
+typedef struct {
+    bool cond;
+    bool parent_active;
+} CondLevel;
+
+static char *get_directory_path(const char *filepath) {
+    const char *last_slash = strrchr(filepath, '/');
+    if (!last_slash) {
+        return xstrdup("");
+    }
+    int len = last_slash - filepath;
+    char *dir = xmalloc(len + 1);
+    strncpy(dir, filepath, len);
+    dir[len] = '\0';
+    return dir;
+}
+
+static char *read_file_or_null(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        return NULL;
+    }
+
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    char *buf = xmalloc(size + 1);
+    size_t read_bytes = fread(buf, 1, size, fp);
+    buf[read_bytes] = '\0';
+    fclose(fp);
+    return buf;
+}
+
 Token *tokenize(const char *filename, const char *source) {
     Token head = {0};
     Token *cur = &head;
@@ -17,6 +85,12 @@ Token *tokenize(const char *filename, const char *source) {
     int line = 1;
     int col = 1;
     const char *p = source;
+    bool bol = true;
+
+    CondLevel cond_stack[100];
+    int cond_depth = 0;
+
+    #define SHOULD_EMIT() ((cond_depth == 0) || (cond_stack[cond_depth - 1].cond && cond_stack[cond_depth - 1].parent_active))
 
     while (*p) {
         // Skip whitespace
@@ -24,6 +98,7 @@ Token *tokenize(const char *filename, const char *source) {
             if (*p == '\n') {
                 line++;
                 col = 1;
+                bol = true;
             } else {
                 col++;
             }
@@ -41,6 +116,183 @@ Token *tokenize(const char *filename, const char *source) {
             }
             continue;
         }
+
+        // Handle preprocessor directive
+        if (bol && *p == '#') {
+            p++; col++; // Consume '#'
+            while (*p && (*p == ' ' || *p == '\t')) {
+                p++; col++;
+            }
+            const char *dir_start = p;
+            while (*p && isalpha((unsigned char)*p)) {
+                p++; col++;
+            }
+            int dir_len = p - dir_start;
+            char *dir = xmalloc(dir_len + 1);
+            strncpy(dir, dir_start, dir_len);
+            dir[dir_len] = '\0';
+
+            if (strcmp(dir, "ifdef") == 0) {
+                while (*p && (*p == ' ' || *p == '\t')) {
+                    p++; col++;
+                }
+                const char *m_start = p;
+                while (*p && (isalnum((unsigned char)*p) || *p == '_')) {
+                    p++; col++;
+                }
+                int m_len = p - m_start;
+                char *m_name = xmalloc(m_len + 1);
+                strncpy(m_name, m_start, m_len);
+                m_name[m_len] = '\0';
+
+                bool parent_active = SHOULD_EMIT();
+                bool cond = (find_macro(m_name) != NULL);
+                cond_stack[cond_depth++] = (CondLevel){ cond, parent_active };
+                free(m_name);
+            } else if (strcmp(dir, "ifndef") == 0) {
+                while (*p && (*p == ' ' || *p == '\t')) {
+                    p++; col++;
+                }
+                const char *m_start = p;
+                while (*p && (isalnum((unsigned char)*p) || *p == '_')) {
+                    p++; col++;
+                }
+                int m_len = p - m_start;
+                char *m_name = xmalloc(m_len + 1);
+                strncpy(m_name, m_start, m_len);
+                m_name[m_len] = '\0';
+
+                bool parent_active = SHOULD_EMIT();
+                bool cond = (find_macro(m_name) == NULL);
+                cond_stack[cond_depth++] = (CondLevel){ cond, parent_active };
+                free(m_name);
+            } else if (strcmp(dir, "else") == 0) {
+                if (cond_depth == 0) {
+                    error_at(filename, line, col, "#else without #ifdef/#ifndef");
+                }
+                cond_stack[cond_depth - 1].cond = !cond_stack[cond_depth - 1].cond;
+            } else if (strcmp(dir, "endif") == 0) {
+                if (cond_depth == 0) {
+                    error_at(filename, line, col, "#endif without #ifdef/#ifndef");
+                }
+                cond_depth--;
+            } else if (SHOULD_EMIT()) {
+                if (strcmp(dir, "include") == 0) {
+                    while (*p && (*p == ' ' || *p == '\t')) {
+                        p++; col++;
+                    }
+                    if (*p == '"') {
+                        p++; col++;
+                        const char *fn_start = p;
+                        while (*p && *p != '"' && *p != '\n') {
+                            p++; col++;
+                        }
+                        if (*p == '"') {
+                            int fn_len = p - fn_start;
+                            char *fn = xmalloc(fn_len + 1);
+                            strncpy(fn, fn_start, fn_len);
+                            fn[fn_len] = '\0';
+                            p++; col++;
+
+                            char *dir_path = get_directory_path(filename);
+                            char *full_path = xmalloc(strlen(dir_path) + strlen(fn) + 2);
+                            if (strlen(dir_path) > 0) {
+                                sprintf(full_path, "%s/%s", dir_path, fn);
+                            } else {
+                                sprintf(full_path, "%s", fn);
+                            }
+                            free(dir_path);
+                            free(fn);
+
+                            char *inc_source = read_file_or_null(full_path);
+                            if (!inc_source) {
+                                inc_source = read_file_or_null(fn);
+                            }
+                            if (!inc_source) {
+                                error_at(filename, line, col, "Cannot open include file");
+                            }
+
+                            Token *inc_tokens = tokenize(full_path, inc_source);
+                            free(full_path);
+                            free(inc_source);
+
+                            if (inc_tokens) {
+                                cur->next = inc_tokens;
+                                while (cur->next && cur->next->type != TOKEN_EOF) {
+                                    cur = cur->next;
+                                }
+                                Token *eof_tok = cur->next;
+                                if (eof_tok && eof_tok->type == TOKEN_EOF) {
+                                    cur->next = NULL;
+                                    free_tokens(eof_tok);
+                                }
+                            }
+                        } else {
+                            error_at(filename, line, col, "Expected closing quote in #include");
+                        }
+                    } else if (*p == '<') {
+                        while (*p && *p != '>' && *p != '\n') {
+                            p++; col++;
+                        }
+                        if (*p == '>') {
+                            p++; col++;
+                        }
+                    }
+                } else if (strcmp(dir, "define") == 0) {
+                    while (*p && (*p == ' ' || *p == '\t')) {
+                        p++; col++;
+                    }
+                    const char *m_start = p;
+                    while (*p && (isalnum((unsigned char)*p) || *p == '_')) {
+                        p++; col++;
+                    }
+                    int m_len = p - m_start;
+                    if (m_len == 0) {
+                        error_at(filename, line, col, "Expected macro name");
+                    }
+                    char *m_name = xmalloc(m_len + 1);
+                    strncpy(m_name, m_start, m_len);
+                    m_name[m_len] = '\0';
+
+                    while (*p && (*p == ' ' || *p == '\t')) {
+                        p++; col++;
+                    }
+                    const char *val_start = p;
+                    while (*p && *p != '\n') {
+                        p++; col++;
+                    }
+                    int val_len = p - val_start;
+                    char *m_val = xmalloc(val_len + 1);
+                    strncpy(m_val, val_start, val_len);
+                    m_val[val_len] = '\0';
+
+                    add_macro(m_name, m_val);
+                    free(m_name);
+                    free(m_val);
+                }
+            }
+
+            free(dir);
+            while (*p && *p != '\n') {
+                p++; col++;
+            }
+            if (*p == '\n') {
+                line++;
+                col = 1;
+                bol = true;
+                p++;
+            }
+            continue;
+        }
+
+        // If we are in an inactive block, skip ordinary characters
+        if (!SHOULD_EMIT()) {
+            p++; col++;
+            bol = false;
+            continue;
+        }
+
+        bol = false;
 
         // String literals
         if (*p == '"') {
@@ -258,6 +510,26 @@ Token *tokenize(const char *filename, const char *source) {
             strncpy(val, start, len);
             val[len] = '\0';
 
+            Macro *m = find_macro(val);
+            if (m && !m->in_expansion) {
+                m->in_expansion = true;
+                Token *macro_tokens = tokenize(filename, m->value);
+                m->in_expansion = false;
+                if (macro_tokens) {
+                    cur->next = macro_tokens;
+                    while (cur->next && cur->next->type != TOKEN_EOF) {
+                        cur = cur->next;
+                    }
+                    Token *eof_tok = cur->next;
+                    if (eof_tok && eof_tok->type == TOKEN_EOF) {
+                        cur->next = NULL;
+                        free_tokens(eof_tok);
+                    }
+                }
+                free(val);
+                continue;
+            }
+
             TokenType type = TOKEN_IDENT;
             if (strcmp(val, "int") == 0) {
                 type = TOKEN_INT;
@@ -295,6 +567,7 @@ Token *tokenize(const char *filename, const char *source) {
     }
 
     cur->next = new_token(TOKEN_EOF, NULL, line, col);
+    #undef SHOULD_EMIT
     return head.next;
 }
 
