@@ -42,7 +42,7 @@ Token *tokenize(const char *filename, const char *source) {
             continue;
         }
 
-        // Parentheses and Braces
+        // Parentheses, Braces, Comma, Semicolon
         if (*p == '(') {
             cur->next = new_token(TOKEN_LPAREN, NULL, line, col);
             cur = cur->next;
@@ -69,6 +69,12 @@ Token *tokenize(const char *filename, const char *source) {
         }
         if (*p == ';') {
             cur->next = new_token(TOKEN_SEMI, NULL, line, col);
+            cur = cur->next;
+            p++; col++;
+            continue;
+        }
+        if (*p == ',') {
+            cur->next = new_token(TOKEN_COMMA, NULL, line, col);
             cur = cur->next;
             p++; col++;
             continue;
@@ -192,6 +198,20 @@ Token *tokenize(const char *filename, const char *source) {
                 type = TOKEN_BOOL;
             } else if (strcmp(val, "return") == 0) {
                 type = TOKEN_RETURN;
+            } else if (strcmp(val, "if") == 0) {
+                type = TOKEN_IF;
+            } else if (strcmp(val, "else") == 0) {
+                type = TOKEN_ELSE;
+            } else if (strcmp(val, "while") == 0) {
+                type = TOKEN_WHILE;
+            } else if (strcmp(val, "do") == 0) {
+                type = TOKEN_DO;
+            } else if (strcmp(val, "for") == 0) {
+                type = TOKEN_FOR;
+            } else if (strcmp(val, "break") == 0) {
+                type = TOKEN_BREAK;
+            } else if (strcmp(val, "continue") == 0) {
+                type = TOKEN_CONTINUE;
             }
 
             cur->next = new_token(type, type == TOKEN_IDENT ? val : NULL, line, start_col);
@@ -215,6 +235,13 @@ void print_tokens(Token *tok) {
             case TOKEN_INT: printf("KEYWORD: int\n"); break;
             case TOKEN_BOOL: printf("KEYWORD: _Bool\n"); break;
             case TOKEN_RETURN: printf("KEYWORD: return\n"); break;
+            case TOKEN_IF: printf("KEYWORD: if\n"); break;
+            case TOKEN_ELSE: printf("KEYWORD: else\n"); break;
+            case TOKEN_WHILE: printf("KEYWORD: while\n"); break;
+            case TOKEN_DO: printf("KEYWORD: do\n"); break;
+            case TOKEN_FOR: printf("KEYWORD: for\n"); break;
+            case TOKEN_BREAK: printf("KEYWORD: break\n"); break;
+            case TOKEN_CONTINUE: printf("KEYWORD: continue\n"); break;
             case TOKEN_IDENT: printf("IDENTIFIER: %s\n", tok->value); break;
             case TOKEN_NUM: printf("NUMBER: %s\n", tok->value); break;
             case TOKEN_LPAREN: printf("LPAREN: (\n"); break;
@@ -222,6 +249,7 @@ void print_tokens(Token *tok) {
             case TOKEN_LBRACE: printf("LBRACE: {\n"); break;
             case TOKEN_RBRACE: printf("RBRACE: }\n"); break;
             case TOKEN_SEMI: printf("SEMI: ;\n"); break;
+            case TOKEN_COMMA: printf("COMMA: ,\n"); break;
             case TOKEN_PLUS: printf("PLUS: +\n"); break;
             case TOKEN_MINUS: printf("MINUS: -\n"); break;
             case TOKEN_STAR: printf("STAR: *\n"); break;

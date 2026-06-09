@@ -37,6 +37,54 @@ static int add_local(const char *name) {
     return new_offset;
 }
 
+static void register_locals(ASTNode *node) {
+    if (!node) return;
+    switch (node->type) {
+        case AST_STMT_DECL:
+            add_local(node->decl_stmt.name);
+            break;
+        case AST_STMT_BLOCK:
+            for (int i = 0; i < node->block.stmt_count; i++) {
+                register_locals(node->block.stmts[i]);
+            }
+            break;
+        case AST_STMT_IF:
+            register_locals(node->if_stmt.then_branch);
+            if (node->if_stmt.else_branch) {
+                register_locals(node->if_stmt.else_branch);
+            }
+            break;
+        case AST_STMT_WHILE:
+        case AST_STMT_DO_WHILE:
+            register_locals(node->while_stmt.body);
+            break;
+        case AST_STMT_FOR:
+            if (node->for_stmt.init && node->for_stmt.init->type == AST_STMT_DECL) {
+                register_locals(node->for_stmt.init);
+            }
+            register_locals(node->for_stmt.body);
+            break;
+        default:
+            break;
+    }
+}
+
+typedef enum {
+    LOOP_WHILE,
+    LOOP_DO_WHILE,
+    LOOP_FOR
+} LoopType;
+
+typedef struct {
+    int label_num;
+    LoopType type;
+} LoopInfo;
+
+static LoopInfo loop_stack[100];
+static int loop_depth = 0;
+
+static int label_counter = 0;
+
 static void gen_node(ASTNode *node, FILE *out) {
     if (!node) return;
 
@@ -50,15 +98,17 @@ static void gen_node(ASTNode *node, FILE *out) {
         case AST_FUNC_DECL: {
             clear_locals();
 
-            // First pass: scan function statements to register all variable declarations
-            for (int i = 0; i < node->func.stmt_count; i++) {
-                ASTNode *stmt = node->func.stmts[i];
-                if (stmt->type == AST_STMT_DECL) {
-                    add_local(stmt->decl_stmt.name);
-                }
+            // Register parameter offsets
+            for (int i = 0; i < node->func.param_count; i++) {
+                add_local(node->func.params[i]);
             }
 
-            // Calculate 16-byte aligned stack allocation
+            // Register local variable offsets recursively
+            for (int i = 0; i < node->func.stmt_count; i++) {
+                register_locals(node->func.stmts[i]);
+            }
+
+            // Aligned stack allocation
             int total_vars = local_count;
             int stack_alloc = ((total_vars * 4) + 15) / 16 * 16;
 
@@ -71,6 +121,12 @@ static void gen_node(ASTNode *node, FILE *out) {
             fprintf(out, "    mov x29, sp\n");
             if (stack_alloc > 0) {
                 fprintf(out, "    sub sp, sp, #%d\n", stack_alloc);
+            }
+
+            // Copy incoming parameters into stack slots
+            for (int i = 0; i < node->func.param_count; i++) {
+                int offset = find_local(node->func.params[i]);
+                fprintf(out, "    str w%d, [x29, #-%d]\n", i, offset);
             }
             fprintf(out, "\n");
 
@@ -102,7 +158,7 @@ static void gen_node(ASTNode *node, FILE *out) {
         case AST_STMT_DECL: {
             int offset = find_local(node->decl_stmt.name);
             if (node->decl_stmt.init) {
-                gen_node(node->decl_stmt.init, out); // Evaluate initializer -> w0
+                gen_node(node->decl_stmt.init, out); // Evaluate -> w0
             } else {
                 fprintf(out, "    mov w0, #0\n"); // Default init to 0
             }
@@ -110,12 +166,134 @@ static void gen_node(ASTNode *node, FILE *out) {
             break;
         }
 
+        case AST_STMT_IF: {
+            int lbl = label_counter++;
+            gen_node(node->if_stmt.cond, out);
+            fprintf(out, "    cmp w0, #0\n");
+            if (node->if_stmt.else_branch) {
+                fprintf(out, "    beq .L.else.%d\n", lbl);
+                gen_node(node->if_stmt.then_branch, out);
+                fprintf(out, "    b .L.end.%d\n", lbl);
+                fprintf(out, ".L.else.%d:\n", lbl);
+                gen_node(node->if_stmt.else_branch, out);
+            } else {
+                fprintf(out, "    beq .L.end.%d\n", lbl);
+                gen_node(node->if_stmt.then_branch, out);
+            }
+            fprintf(out, ".L.end.%d:\n", lbl);
+            break;
+        }
+
+        case AST_STMT_WHILE: {
+            int lbl = label_counter++;
+            loop_stack[loop_depth++] = (LoopInfo){lbl, LOOP_WHILE};
+
+            fprintf(out, ".L.begin.%d:\n", lbl);
+            gen_node(node->while_stmt.cond, out);
+            fprintf(out, "    cmp w0, #0\n");
+            fprintf(out, "    beq .L.end.%d\n", lbl);
+            gen_node(node->while_stmt.body, out);
+            fprintf(out, "    b .L.begin.%d\n", lbl);
+            fprintf(out, ".L.end.%d:\n", lbl);
+
+            loop_depth--;
+            break;
+        }
+
+        case AST_STMT_DO_WHILE: {
+            int lbl = label_counter++;
+            loop_stack[loop_depth++] = (LoopInfo){lbl, LOOP_DO_WHILE};
+
+            fprintf(out, ".L.begin.%d:\n", lbl);
+            gen_node(node->while_stmt.body, out);
+            fprintf(out, ".L.cond.%d:\n", lbl);
+            gen_node(node->while_stmt.cond, out);
+            fprintf(out, "    cmp w0, #0\n");
+            fprintf(out, "    bne .L.begin.%d\n", lbl);
+            fprintf(out, ".L.end.%d:\n", lbl);
+
+            loop_depth--;
+            break;
+        }
+
+        case AST_STMT_FOR: {
+            int lbl = label_counter++;
+            loop_stack[loop_depth++] = (LoopInfo){lbl, LOOP_FOR};
+
+            if (node->for_stmt.init) {
+                gen_node(node->for_stmt.init, out);
+            }
+            fprintf(out, ".L.begin.%d:\n", lbl);
+            if (node->for_stmt.cond) {
+                gen_node(node->for_stmt.cond, out);
+                fprintf(out, "    cmp w0, #0\n");
+                fprintf(out, "    beq .L.end.%d\n", lbl);
+            }
+            gen_node(node->for_stmt.body, out);
+            fprintf(out, ".L.post.%d:\n", lbl);
+            if (node->for_stmt.post) {
+                gen_node(node->for_stmt.post, out);
+            }
+            fprintf(out, "    b .L.begin.%d\n", lbl);
+            fprintf(out, ".L.end.%d:\n", lbl);
+
+            loop_depth--;
+            break;
+        }
+
+        case AST_STMT_BLOCK:
+            for (int i = 0; i < node->block.stmt_count; i++) {
+                gen_node(node->block.stmts[i], out);
+            }
+            break;
+
+        case AST_STMT_BREAK: {
+            if (loop_depth == 0) {
+                error("break statement outside of loop");
+            }
+            int lbl = loop_stack[loop_depth - 1].label_num;
+            fprintf(out, "    b .L.end.%d\n", lbl);
+            break;
+        }
+
+        case AST_STMT_CONTINUE: {
+            if (loop_depth == 0) {
+                error("continue statement outside of loop");
+            }
+            LoopInfo info = loop_stack[loop_depth - 1];
+            if (info.type == LOOP_WHILE) {
+                fprintf(out, "    b .L.begin.%d\n", info.label_num);
+            } else if (info.type == LOOP_DO_WHILE) {
+                fprintf(out, "    b .L.cond.%d\n", info.label_num);
+            } else if (info.type == LOOP_FOR) {
+                fprintf(out, "    b .L.post.%d\n", info.label_num);
+            }
+            break;
+        }
+
+        case AST_EXPR_CALL: {
+            // Evaluate arguments and push them to stack
+            for (int i = 0; i < node->call.arg_count; i++) {
+                gen_node(node->call.args[i], out);
+                fprintf(out, "    str w0, [sp, #-16]!\n");
+            }
+            // Pop arguments into registers w0-w7
+            for (int i = node->call.arg_count - 1; i >= 0; i--) {
+                if (i < 8) {
+                    fprintf(out, "    ldr w%d, [sp], #16\n", i);
+                } else {
+                    error("ncc currently supports up to 8 arguments in function calls");
+                }
+            }
+            // Perform branch call
+            fprintf(out, "    bl %s\n", node->call.name);
+            break;
+        }
+
         case AST_EXPR_BINARY:
             gen_node(node->binary.left, out); // w0 = left
-            // Push w0 to stack
             fprintf(out, "    str w0, [sp, #-16]!\n");
             gen_node(node->binary.right, out); // w0 = right
-            // Pop left into w1
             fprintf(out, "    ldr w1, [sp], #16\n");
 
             switch (node->binary.op) {

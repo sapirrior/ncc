@@ -8,6 +8,13 @@ typedef enum {
     TOKEN_INT,       // 'int' keyword
     TOKEN_BOOL,      // '_Bool' keyword
     TOKEN_RETURN,    // 'return' keyword
+    TOKEN_IF,        // 'if' keyword
+    TOKEN_ELSE,      // 'else' keyword
+    TOKEN_WHILE,     // 'while' keyword
+    TOKEN_DO,        // 'do' keyword
+    TOKEN_FOR,       // 'for' keyword
+    TOKEN_BREAK,     // 'break' keyword
+    TOKEN_CONTINUE,  // 'continue' keyword
     TOKEN_IDENT,     // Identifier
     TOKEN_NUM,       // Number literal
     TOKEN_LPAREN,    // '('
@@ -15,6 +22,7 @@ typedef enum {
     TOKEN_LBRACE,    // '{'
     TOKEN_RBRACE,    // '}'
     TOKEN_SEMI,      // ';'
+    TOKEN_COMMA,     // ','
 
     // Operators
     TOKEN_PLUS,      // '+'
