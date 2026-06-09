@@ -453,51 +453,82 @@ static void gen_node(ASTNode *node, FILE *out) {
             break;
         }
 
-        case AST_EXPR_BINARY:
+        case AST_EXPR_BINARY: {
+            Type *left_type = get_node_type(node->binary.left);
+            Type *right_type = get_node_type(node->binary.right);
+
+            bool left_is_ptr = left_type && (left_type->kind == KIND_PTR || left_type->kind == KIND_ARRAY);
+            bool right_is_ptr = right_type && (right_type->kind == KIND_PTR || right_type->kind == KIND_ARRAY);
+
             gen_node(node->binary.left, out);
             fprintf(out, "    str x0, [sp, #-16]!\n");
             gen_node(node->binary.right, out);
             fprintf(out, "    ldr x1, [sp], #16\n");
 
-            switch (node->binary.op) {
-                case OP_ADD:
-                    fprintf(out, "    add w0, w1, w0\n");
-                    break;
-                case OP_SUB:
-                    fprintf(out, "    sub w0, w1, w0\n");
-                    break;
-                case OP_MUL:
-                    fprintf(out, "    mul w0, w1, w0\n");
-                    break;
-                case OP_DIV:
-                    fprintf(out, "    sdiv w0, w1, w0\n");
-                    break;
-                case OP_EQ:
-                    fprintf(out, "    cmp w1, w0\n");
-                    fprintf(out, "    cset w0, eq\n");
-                    break;
-                case OP_NE:
-                    fprintf(out, "    cmp w1, w0\n");
-                    fprintf(out, "    cset w0, ne\n");
-                    break;
-                case OP_LT:
-                    fprintf(out, "    cmp w1, w0\n");
-                    fprintf(out, "    cset w0, lt\n");
-                    break;
-                case OP_LE:
-                    fprintf(out, "    cmp w1, w0\n");
-                    fprintf(out, "    cset w0, le\n");
-                    break;
-                case OP_GT:
-                    fprintf(out, "    cmp w1, w0\n");
-                    fprintf(out, "    cset w0, gt\n");
-                    break;
-                case OP_GE:
-                    fprintf(out, "    cmp w1, w0\n");
-                    fprintf(out, "    cset w0, ge\n");
-                    break;
+            if (left_is_ptr && !right_is_ptr && (node->binary.op == OP_ADD || node->binary.op == OP_SUB)) {
+                Type *elem_type = (left_type->kind == KIND_PTR) ? left_type->ptr_to : left_type->array.elem_type;
+                int scale = type_size(elem_type);
+                fprintf(out, "    sxtw x0, w0\n");
+                if (scale > 1) {
+                    fprintf(out, "    mov x2, #%d\n", scale);
+                    fprintf(out, "    mul x0, x0, x2\n");
+                }
+                if (node->binary.op == OP_ADD) {
+                    fprintf(out, "    add x0, x1, x0\n");
+                } else {
+                    fprintf(out, "    sub x0, x1, x0\n");
+                }
+            } else if (right_is_ptr && !left_is_ptr && node->binary.op == OP_ADD) {
+                Type *elem_type = (right_type->kind == KIND_PTR) ? right_type->ptr_to : right_type->array.elem_type;
+                int scale = type_size(elem_type);
+                fprintf(out, "    sxtw x1, w1\n");
+                if (scale > 1) {
+                    fprintf(out, "    mov x2, #%d\n", scale);
+                    fprintf(out, "    mul x1, x1, x2\n");
+                }
+                fprintf(out, "    add x0, x0, x1\n");
+            } else {
+                switch (node->binary.op) {
+                    case OP_ADD:
+                        fprintf(out, "    add w0, w1, w0\n");
+                        break;
+                    case OP_SUB:
+                        fprintf(out, "    sub w0, w1, w0\n");
+                        break;
+                    case OP_MUL:
+                        fprintf(out, "    mul w0, w1, w0\n");
+                        break;
+                    case OP_DIV:
+                        fprintf(out, "    sdiv w0, w1, w0\n");
+                        break;
+                    case OP_EQ:
+                        fprintf(out, "    cmp w1, w0\n");
+                        fprintf(out, "    cset w0, eq\n");
+                        break;
+                    case OP_NE:
+                        fprintf(out, "    cmp w1, w0\n");
+                        fprintf(out, "    cset w0, ne\n");
+                        break;
+                    case OP_LT:
+                        fprintf(out, "    cmp w1, w0\n");
+                        fprintf(out, "    cset w0, lt\n");
+                        break;
+                    case OP_LE:
+                        fprintf(out, "    cmp w1, w0\n");
+                        fprintf(out, "    cset w0, le\n");
+                        break;
+                    case OP_GT:
+                        fprintf(out, "    cmp w1, w0\n");
+                        fprintf(out, "    cset w0, gt\n");
+                        break;
+                    case OP_GE:
+                        fprintf(out, "    cmp w1, w0\n");
+                        fprintf(out, "    cset w0, ge\n");
+                        break;
+                }
             }
             break;
+        }
 
         case AST_EXPR_UNARY:
             gen_node(node->unary.expr, out);
