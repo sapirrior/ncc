@@ -1,5 +1,6 @@
 #include "codegen.h"
 #include "common.h"
+#include "emitter.h"
 
 typedef struct {
     char *name;
@@ -86,14 +87,12 @@ typedef enum {
 } LoopType;
 
 typedef struct {
-    int label_num;
-    LoopType type;
+    int end_label;
+    int cont_label;
 } LoopInfo;
 
 static LoopInfo loop_stack[100];
 static int loop_depth = 0;
-
-static int label_counter = 0;
 
 static Type *get_node_type(ASTNode *node) {
     if (!node) return NULL;
@@ -152,25 +151,25 @@ static Type *get_node_type(ASTNode *node) {
     }
 }
 
-static void gen_node(ASTNode *node, FILE *out);
+static void gen_node(ASTNode *node, Emitter *e);
 
-static void gen_addr(ASTNode *node, FILE *out) {
+static void gen_addr(ASTNode *node, Emitter *e) {
     switch (node->type) {
         case AST_EXPR_VAR: {
             Symbol *sym = find_local(node->var.name);
             if (!sym) {
                 error("Undefined variable: %s", node->var.name);
             }
-            fprintf(out, "    sub x0, x29, #%d\n", sym->offset);
+            emit_sub_imm(e, true, REG_X0, REG_X29, sym->offset);
             break;
         }
 
         case AST_EXPR_MEMBER: {
-            gen_addr(node->member.expr, out);
+            gen_addr(node->member.expr, e);
 
             Type *struct_type = get_node_type(node->member.expr);
             if (struct_type->kind == KIND_PTR) {
-                fprintf(out, "    ldr x0, [x0]\n");
+                emit_ldr_imm(e, 8, REG_X0, REG_X0, 0);
                 struct_type = struct_type->ptr_to;
             }
             if (struct_type->kind != KIND_STRUCT) {
@@ -189,22 +188,22 @@ static void gen_addr(ASTNode *node, FILE *out) {
             }
 
             if (offset > 0) {
-                fprintf(out, "    add x0, x0, #%d\n", offset);
+                emit_add_imm(e, true, REG_X0, REG_X0, offset);
             }
             break;
         }
 
         case AST_EXPR_INDEX: {
-            gen_addr(node->index.expr, out);
-            fprintf(out, "    str x0, [sp, #-16]!\n");
+            gen_addr(node->index.expr, e);
+            emit_str_preindex(e, 8, REG_X0, REG_SP, -16);
 
-            gen_node(node->index.index, out);
-            fprintf(out, "    sxtw x0, w0\n");
-            fprintf(out, "    ldr x1, [sp], #16\n");
+            gen_node(node->index.index, e);
+            emit_sxtw(e, REG_X0, REG_X0);
+            emit_ldr_postindex(e, 8, REG_X1, REG_SP, 16);
 
             Type *arr_type = get_node_type(node->index.expr);
             if (arr_type->kind == KIND_PTR) {
-                fprintf(out, "    ldr x1, [x1]\n");
+                emit_ldr_imm(e, 8, REG_X1, REG_X1, 0);
                 arr_type = arr_type->ptr_to;
             } else if (arr_type->kind == KIND_ARRAY) {
                 arr_type = arr_type->array.elem_type;
@@ -213,14 +212,14 @@ static void gen_addr(ASTNode *node, FILE *out) {
             }
 
             int elem_size = type_size(arr_type);
-            fprintf(out, "    mov x2, #%d\n", elem_size);
-            fprintf(out, "    mul x0, x0, x2\n");
-            fprintf(out, "    add x0, x1, x0\n");
+            emit_mov_imm(e, true, REG_X2, elem_size);
+            emit_mul_reg(e, true, REG_X0, REG_X0, REG_X2);
+            emit_add_reg(e, true, REG_X0, REG_X1, REG_X0);
             break;
         }
 
         case AST_EXPR_DEREF:
-            gen_node(node->deref.expr, out);
+            gen_node(node->deref.expr, e);
             break;
 
         default:
@@ -229,13 +228,13 @@ static void gen_addr(ASTNode *node, FILE *out) {
     }
 }
 
-static void gen_node(ASTNode *node, FILE *out) {
+static void gen_node(ASTNode *node, Emitter *e) {
     if (!node) return;
 
     switch (node->type) {
         case AST_PROGRAM:
             for (int i = 0; i < node->program.decl_count; i++) {
-                gen_node(node->program.decls[i], out);
+                gen_node(node->program.decls[i], e);
             }
             break;
 
@@ -253,15 +252,19 @@ static void gen_node(ASTNode *node, FILE *out) {
             int total_size = current_stack_offset;
             int stack_alloc = ((total_size + 15) / 16) * 16;
 
-            fprintf(out, "    .global %s\n", node->func.name);
-            fprintf(out, "    .p2align 2\n");
-            fprintf(out, "%s:\n", node->func.name);
+            if (!e->binary_mode) {
+                fprintf(e->out_file, "    .global %s\n", node->func.name);
+                fprintf(e->out_file, "    .p2align 2\n");
+                fprintf(e->out_file, "%s:\n", node->func.name);
+            } else {
+                emitter_add_symbol(e, node->func.name, e->size);
+            }
 
             // Prologue
-            fprintf(out, "    stp x29, x30, [sp, #-16]!\n");
-            fprintf(out, "    mov x29, sp\n");
+            emit_stp_preindex(e, REG_X29, REG_X30, REG_SP, -16);
+            emit_mov_reg(e, true, REG_X29, REG_SP);
             if (stack_alloc > 0) {
-                fprintf(out, "    sub sp, sp, #%d\n", stack_alloc);
+                emit_sub_imm(e, true, REG_SP, REG_SP, stack_alloc);
             }
 
             // Copy incoming parameters
@@ -269,24 +272,23 @@ static void gen_node(ASTNode *node, FILE *out) {
                 Symbol *sym = find_local(node->func.params[i]);
                 int size = type_size(sym->type);
                 if (sym->type->kind == KIND_FLOAT) {
-                    fprintf(out, "    str s%d, [x29, #-%d]\n", i, sym->offset);
+                    emit_fstr_imm(e, (FloatReg)i, REG_X29, -sym->offset);
                 } else if (size == 4) {
-                    fprintf(out, "    str w%d, [x29, #-%d]\n", i, sym->offset);
+                    emit_str_imm(e, 4, (Reg)i, REG_X29, -sym->offset);
                 } else if (size == 8) {
-                    fprintf(out, "    str x%d, [x29, #-%d]\n", i, sym->offset);
+                    emit_str_imm(e, 8, (Reg)i, REG_X29, -sym->offset);
                 }
             }
-            fprintf(out, "\n");
 
             // Compile statements
             for (int i = 0; i < node->func.stmt_count; i++) {
-                gen_node(node->func.stmts[i], out);
+                gen_node(node->func.stmts[i], e);
             }
 
             // Epilogue
-            fprintf(out, "\n    mov sp, x29\n");
-            fprintf(out, "    ldp x29, x30, [sp], #16\n");
-            fprintf(out, "    ret\n");
+            emit_mov_reg(e, true, REG_SP, REG_X29);
+            emit_ldp_postindex(e, REG_X29, REG_X30, REG_SP, 16);
+            emit_ret(e);
 
             clear_locals();
             break;
@@ -296,116 +298,127 @@ static void gen_node(ASTNode *node, FILE *out) {
             break;
 
         case AST_STMT_RETURN:
-            gen_node(node->ret_stmt.expr, out);
-            fprintf(out, "    mov sp, x29\n");
-            fprintf(out, "    ldp x29, x30, [sp], #16\n");
-            fprintf(out, "    ret\n");
+            gen_node(node->ret_stmt.expr, e);
+            emit_mov_reg(e, true, REG_SP, REG_X29);
+            emit_ldp_postindex(e, REG_X29, REG_X30, REG_SP, 16);
+            emit_ret(e);
             break;
 
         case AST_STMT_EXPR:
-            gen_node(node->expr_stmt.expr, out);
+            gen_node(node->expr_stmt.expr, e);
             break;
 
         case AST_STMT_DECL: {
             Symbol *sym = find_local(node->decl_stmt.name);
             int size = type_size(sym->type);
             if (node->decl_stmt.init) {
-                gen_node(node->decl_stmt.init, out); // Evaluates -> w0/x0/s0
-                fprintf(out, "    sub x1, x29, #%d\n", sym->offset);
+                gen_node(node->decl_stmt.init, e); // Evaluates -> w0/x0/s0
+                emit_sub_imm(e, true, REG_X1, REG_X29, sym->offset);
                 if (sym->type->kind == KIND_FLOAT) {
-                    fprintf(out, "    str s0, [x1]\n");
+                    emit_fstr_imm(e, REG_S0, REG_X1, 0);
                 } else if (size == 4) {
-                    fprintf(out, "    str w0, [x1]\n");
+                    emit_str_imm(e, 4, REG_X0, REG_X1, 0);
                 } else if (size == 8) {
-                    fprintf(out, "    str x0, [x1]\n");
+                    emit_str_imm(e, 8, REG_X0, REG_X1, 0);
                 } else {
                     // Struct/array copy
-                    fprintf(out, "    mov x1, x0\n");
-                    fprintf(out, "    sub x0, x29, #%d\n", sym->offset);
+                    emit_mov_reg(e, true, REG_X1, REG_X0);
+                    emit_sub_imm(e, true, REG_X0, REG_X29, sym->offset);
                     for (int i = 0; i < size; i += 4) {
-                        fprintf(out, "    ldr w2, [x1, #%d]\n", i);
-                        fprintf(out, "    str w2, [x0, #%d]\n", i);
+                        emit_ldr_imm(e, 4, REG_X2, REG_X1, i);
+                        emit_str_imm(e, 4, REG_X2, REG_X0, i);
                     }
                 }
             } else {
-                fprintf(out, "    sub x0, x29, #%d\n", sym->offset);
+                emit_sub_imm(e, true, REG_X0, REG_X29, sym->offset);
                 for (int i = 0; i < size; i += 4) {
-                    fprintf(out, "    str wzr, [x0, #%d]\n", i);
+                    emit_str_imm(e, 4, REG_XZR, REG_X0, i);
                 }
             }
             break;
         }
 
         case AST_STMT_IF: {
-            int lbl = label_counter++;
-            gen_node(node->if_stmt.cond, out);
-            fprintf(out, "    cmp w0, #0\n");
+            int else_lbl = emitter_new_label(e);
+            int end_lbl = emitter_new_label(e);
+
+            gen_node(node->if_stmt.cond, e);
+            emit_cmp_imm(e, false, REG_X0, 0);
+
             if (node->if_stmt.else_branch) {
-                fprintf(out, "    beq .L.else.%d\n", lbl);
-                gen_node(node->if_stmt.then_branch, out);
-                fprintf(out, "    b .L.end.%d\n", lbl);
-                fprintf(out, ".L.else.%d:\n", lbl);
-                gen_node(node->if_stmt.else_branch, out);
+                emit_b_cond_label(e, COND_EQ, else_lbl);
+                gen_node(node->if_stmt.then_branch, e);
+                emit_b_label(e, end_lbl);
+                emitter_define_label(e, else_lbl);
+                gen_node(node->if_stmt.else_branch, e);
             } else {
-                fprintf(out, "    beq .L.end.%d\n", lbl);
-                gen_node(node->if_stmt.then_branch, out);
+                emit_b_cond_label(e, COND_EQ, end_lbl);
+                gen_node(node->if_stmt.then_branch, e);
             }
-            fprintf(out, ".L.end.%d:\n", lbl);
+            emitter_define_label(e, end_lbl);
             break;
         }
 
         case AST_STMT_WHILE: {
-            int lbl = label_counter++;
-            loop_stack[loop_depth++] = (LoopInfo){lbl, LOOP_WHILE};
+            int begin_lbl = emitter_new_label(e);
+            int end_lbl = emitter_new_label(e);
+            loop_stack[loop_depth++] = (LoopInfo){end_lbl, begin_lbl};
 
-            fprintf(out, ".L.begin.%d:\n", lbl);
-            gen_node(node->while_stmt.cond, out);
-            fprintf(out, "    cmp w0, #0\n");
-            fprintf(out, "    beq .L.end.%d\n", lbl);
-            gen_node(node->while_stmt.body, out);
-            fprintf(out, "    b .L.begin.%d\n", lbl);
-            fprintf(out, ".L.end.%d:\n", lbl);
+            emitter_define_label(e, begin_lbl);
+            gen_node(node->while_stmt.cond, e);
+            emit_cmp_imm(e, false, REG_X0, 0);
+            emit_b_cond_label(e, COND_EQ, end_lbl);
+
+            gen_node(node->while_stmt.body, e);
+            emit_b_label(e, begin_lbl);
+            emitter_define_label(e, end_lbl);
 
             loop_depth--;
             break;
         }
 
         case AST_STMT_DO_WHILE: {
-            int lbl = label_counter++;
-            loop_stack[loop_depth++] = (LoopInfo){lbl, LOOP_DO_WHILE};
+            int begin_lbl = emitter_new_label(e);
+            int cond_lbl = emitter_new_label(e);
+            int end_lbl = emitter_new_label(e);
+            loop_stack[loop_depth++] = (LoopInfo){end_lbl, cond_lbl};
 
-            fprintf(out, ".L.begin.%d:\n", lbl);
-            gen_node(node->while_stmt.body, out);
-            fprintf(out, ".L.cond.%d:\n", lbl);
-            gen_node(node->while_stmt.cond, out);
-            fprintf(out, "    cmp w0, #0\n");
-            fprintf(out, "    bne .L.begin.%d\n", lbl);
-            fprintf(out, ".L.end.%d:\n", lbl);
+            emitter_define_label(e, begin_lbl);
+            gen_node(node->while_stmt.body, e);
+
+            emitter_define_label(e, cond_lbl);
+            gen_node(node->while_stmt.cond, e);
+            emit_cmp_imm(e, false, REG_X0, 0);
+            emit_b_cond_label(e, COND_NE, begin_lbl);
+            emitter_define_label(e, end_lbl);
 
             loop_depth--;
             break;
         }
 
         case AST_STMT_FOR: {
-            int lbl = label_counter++;
-            loop_stack[loop_depth++] = (LoopInfo){lbl, LOOP_FOR};
+            int begin_lbl = emitter_new_label(e);
+            int post_lbl = emitter_new_label(e);
+            int end_lbl = emitter_new_label(e);
+            loop_stack[loop_depth++] = (LoopInfo){end_lbl, post_lbl};
 
             if (node->for_stmt.init) {
-                gen_node(node->for_stmt.init, out);
+                gen_node(node->for_stmt.init, e);
             }
-            fprintf(out, ".L.begin.%d:\n", lbl);
+            emitter_define_label(e, begin_lbl);
             if (node->for_stmt.cond) {
-                gen_node(node->for_stmt.cond, out);
-                fprintf(out, "    cmp w0, #0\n");
-                fprintf(out, "    beq .L.end.%d\n", lbl);
+                gen_node(node->for_stmt.cond, e);
+                emit_cmp_imm(e, false, REG_X0, 0);
+                emit_b_cond_label(e, COND_EQ, end_lbl);
             }
-            gen_node(node->for_stmt.body, out);
-            fprintf(out, ".L.post.%d:\n", lbl);
+            gen_node(node->for_stmt.body, e);
+
+            emitter_define_label(e, post_lbl);
             if (node->for_stmt.post) {
-                gen_node(node->for_stmt.post, out);
+                gen_node(node->for_stmt.post, e);
             }
-            fprintf(out, "    b .L.begin.%d\n", lbl);
-            fprintf(out, ".L.end.%d:\n", lbl);
+            emit_b_label(e, begin_lbl);
+            emitter_define_label(e, end_lbl);
 
             loop_depth--;
             break;
@@ -413,7 +426,7 @@ static void gen_node(ASTNode *node, FILE *out) {
 
         case AST_STMT_BLOCK:
             for (int i = 0; i < node->block.stmt_count; i++) {
-                gen_node(node->block.stmts[i], out);
+                gen_node(node->block.stmts[i], e);
             }
             break;
 
@@ -421,8 +434,8 @@ static void gen_node(ASTNode *node, FILE *out) {
             if (loop_depth == 0) {
                 error("break statement outside loop");
             }
-            int lbl = loop_stack[loop_depth - 1].label_num;
-            fprintf(out, "    b .L.end.%d\n", lbl);
+            int lbl = loop_stack[loop_depth - 1].end_label;
+            emit_b_label(e, lbl);
             break;
         }
 
@@ -430,14 +443,8 @@ static void gen_node(ASTNode *node, FILE *out) {
             if (loop_depth == 0) {
                 error("continue statement outside loop");
             }
-            LoopInfo info = loop_stack[loop_depth - 1];
-            if (info.type == LOOP_WHILE) {
-                fprintf(out, "    b .L.begin.%d\n", info.label_num);
-            } else if (info.type == LOOP_DO_WHILE) {
-                fprintf(out, "    b .L.cond.%d\n", info.label_num);
-            } else if (info.type == LOOP_FOR) {
-                fprintf(out, "    b .L.post.%d\n", info.label_num);
-            }
+            int lbl = loop_stack[loop_depth - 1].cont_label;
+            emit_b_label(e, lbl);
             break;
         }
 
@@ -447,11 +454,11 @@ static void gen_node(ASTNode *node, FILE *out) {
             // Evaluate arguments and push them to stack
             for (int i = 0; i < node->call.arg_count; i++) {
                 Type *arg_type = get_node_type(node->call.args[i]);
-                gen_node(node->call.args[i], out);
+                gen_node(node->call.args[i], e);
                 if (arg_type && arg_type->kind == KIND_FLOAT) {
-                    fprintf(out, "    str s0, [sp, #-16]!\n"); // push float
+                    emit_fstr_preindex(e, REG_S0, REG_SP, -16);
                 } else {
-                    fprintf(out, "    str x0, [sp, #-16]!\n"); // push integer/pointer
+                    emit_str_preindex(e, 8, REG_X0, REG_SP, -16);
                 }
             }
 
@@ -462,18 +469,18 @@ static void gen_node(ASTNode *node, FILE *out) {
             for (int i = node->call.arg_count - 1; i >= 0; i--) {
                 Type *arg_type = get_node_type(node->call.args[i]);
                 if (arg_type && arg_type->kind == KIND_FLOAT) {
-                    fprintf(out, "    ldr s16, [sp], #16\n");
+                    emit_fldr_postindex(e, REG_S16, REG_SP, 16);
                     if (is_printf) {
-                        fprintf(out, "    fcvt d%d, s16\n", float_arg_idx++);
+                        emit_fcvt_d_s(e, float_arg_idx++, REG_S16);
                     } else {
-                        fprintf(out, "    fmov s%d, s16\n", float_arg_idx++);
+                        emit_fmov(e, (FloatReg)float_arg_idx++, REG_S16);
                     }
                 } else {
-                    fprintf(out, "    ldr x%d, [sp], #16\n", int_arg_idx++);
+                    emit_ldr_postindex(e, 8, (Reg)int_arg_idx++, REG_SP, 16);
                 }
             }
 
-            fprintf(out, "    bl %s\n", node->call.name);
+            emit_bl(e, node->call.name);
             break;
         }
 
@@ -485,118 +492,118 @@ static void gen_node(ASTNode *node, FILE *out) {
             bool right_is_ptr = right_type && (right_type->kind == KIND_PTR || right_type->kind == KIND_ARRAY);
             bool is_float = (left_type && left_type->kind == KIND_FLOAT) || (right_type && right_type->kind == KIND_FLOAT);
 
-            gen_node(node->binary.left, out);
+            gen_node(node->binary.left, e);
             if (is_float) {
-                fprintf(out, "    str s0, [sp, #-16]!\n");
+                emit_fstr_preindex(e, REG_S0, REG_SP, -16);
             } else {
-                fprintf(out, "    str x0, [sp, #-16]!\n");
+                emit_str_preindex(e, 8, REG_X0, REG_SP, -16);
             }
 
-            gen_node(node->binary.right, out);
+            gen_node(node->binary.right, e);
             if (is_float) {
-                fprintf(out, "    ldr s1, [sp], #16\n");
+                emit_fldr_postindex(e, REG_S1, REG_SP, 16);
             } else {
-                fprintf(out, "    ldr x1, [sp], #16\n");
+                emit_ldr_postindex(e, 8, REG_X1, REG_SP, 16);
             }
 
             if (is_float) {
                 switch (node->binary.op) {
                     case OP_ADD:
-                        fprintf(out, "    fadd s0, s1, s0\n");
+                        emit_fadd(e, REG_S0, REG_S1, REG_S0);
                         break;
                     case OP_SUB:
-                        fprintf(out, "    fsub s0, s1, s0\n");
+                        emit_fsub(e, REG_S0, REG_S1, REG_S0);
                         break;
                     case OP_MUL:
-                        fprintf(out, "    fmul s0, s1, s0\n");
+                        emit_fmul(e, REG_S0, REG_S1, REG_S0);
                         break;
                     case OP_DIV:
-                        fprintf(out, "    fdiv s0, s1, s0\n");
+                        emit_fdiv(e, REG_S0, REG_S1, REG_S0);
                         break;
                     case OP_EQ:
-                        fprintf(out, "    fcmp s1, s0\n");
-                        fprintf(out, "    cset w0, eq\n");
+                        emit_fcmp(e, REG_S1, REG_S0);
+                        emit_cset(e, REG_X0, COND_EQ);
                         break;
                     case OP_NE:
-                        fprintf(out, "    fcmp s1, s0\n");
-                        fprintf(out, "    cset w0, ne\n");
+                        emit_fcmp(e, REG_S1, REG_S0);
+                        emit_cset(e, REG_X0, COND_NE);
                         break;
                     case OP_LT:
-                        fprintf(out, "    fcmp s1, s0\n");
-                        fprintf(out, "    cset w0, lt\n");
+                        emit_fcmp(e, REG_S1, REG_S0);
+                        emit_cset(e, REG_X0, COND_LT);
                         break;
                     case OP_LE:
-                        fprintf(out, "    fcmp s1, s0\n");
-                        fprintf(out, "    cset w0, le\n");
+                        emit_fcmp(e, REG_S1, REG_S0);
+                        emit_cset(e, REG_X0, COND_LE);
                         break;
                     case OP_GT:
-                        fprintf(out, "    fcmp s1, s0\n");
-                        fprintf(out, "    cset w0, gt\n");
+                        emit_fcmp(e, REG_S1, REG_S0);
+                        emit_cset(e, REG_X0, COND_GT);
                         break;
                     case OP_GE:
-                        fprintf(out, "    fcmp s1, s0\n");
-                        fprintf(out, "    cset w0, ge\n");
+                        emit_fcmp(e, REG_S1, REG_S0);
+                        emit_cset(e, REG_X0, COND_GE);
                         break;
                 }
             } else if (left_is_ptr && !right_is_ptr && (node->binary.op == OP_ADD || node->binary.op == OP_SUB)) {
                 Type *elem_type = (left_type->kind == KIND_PTR) ? left_type->ptr_to : left_type->array.elem_type;
                 int scale = type_size(elem_type);
-                fprintf(out, "    sxtw x0, w0\n");
+                emit_sxtw(e, REG_X0, REG_X0);
                 if (scale > 1) {
-                    fprintf(out, "    mov x2, #%d\n", scale);
-                    fprintf(out, "    mul x0, x0, x2\n");
+                    emit_mov_imm(e, true, REG_X2, scale);
+                    emit_mul_reg(e, true, REG_X0, REG_X0, REG_X2);
                 }
                 if (node->binary.op == OP_ADD) {
-                    fprintf(out, "    add x0, x1, x0\n");
+                    emit_add_reg(e, true, REG_X0, REG_X1, REG_X0);
                 } else {
-                    fprintf(out, "    sub x0, x1, x0\n");
+                    emit_sub_reg(e, true, REG_X0, REG_X1, REG_X0);
                 }
             } else if (right_is_ptr && !left_is_ptr && node->binary.op == OP_ADD) {
                 Type *elem_type = (right_type->kind == KIND_PTR) ? right_type->ptr_to : right_type->array.elem_type;
                 int scale = type_size(elem_type);
-                fprintf(out, "    sxtw x1, w1\n");
+                emit_sxtw(e, REG_X1, REG_X1);
                 if (scale > 1) {
-                    fprintf(out, "    mov x2, #%d\n", scale);
-                    fprintf(out, "    mul x1, x1, x2\n");
+                    emit_mov_imm(e, true, REG_X2, scale);
+                    emit_mul_reg(e, true, REG_X1, REG_X1, REG_X2);
                 }
-                fprintf(out, "    add x0, x0, x1\n");
+                emit_add_reg(e, true, REG_X0, REG_X0, REG_X1);
             } else {
                 switch (node->binary.op) {
                     case OP_ADD:
-                        fprintf(out, "    add w0, w1, w0\n");
+                        emit_add_reg(e, false, REG_X0, REG_X1, REG_X0);
                         break;
                     case OP_SUB:
-                        fprintf(out, "    sub w0, w1, w0\n");
+                        emit_sub_reg(e, false, REG_X0, REG_X1, REG_X0);
                         break;
                     case OP_MUL:
-                        fprintf(out, "    mul w0, w1, w0\n");
+                        emit_mul_reg(e, false, REG_X0, REG_X1, REG_X0);
                         break;
                     case OP_DIV:
-                        fprintf(out, "    sdiv w0, w1, w0\n");
+                        emit_sdiv_reg(e, false, REG_X0, REG_X1, REG_X0);
                         break;
                     case OP_EQ:
-                        fprintf(out, "    cmp w1, w0\n");
-                        fprintf(out, "    cset w0, eq\n");
+                        emit_cmp_reg(e, false, REG_X1, REG_X0);
+                        emit_cset(e, REG_X0, COND_EQ);
                         break;
                     case OP_NE:
-                        fprintf(out, "    cmp w1, w0\n");
-                        fprintf(out, "    cset w0, ne\n");
+                        emit_cmp_reg(e, false, REG_X1, REG_X0);
+                        emit_cset(e, REG_X0, COND_NE);
                         break;
                     case OP_LT:
-                        fprintf(out, "    cmp w1, w0\n");
-                        fprintf(out, "    cset w0, lt\n");
+                        emit_cmp_reg(e, false, REG_X1, REG_X0);
+                        emit_cset(e, REG_X0, COND_LT);
                         break;
                     case OP_LE:
-                        fprintf(out, "    cmp w1, w0\n");
-                        fprintf(out, "    cset w0, le\n");
+                        emit_cmp_reg(e, false, REG_X1, REG_X0);
+                        emit_cset(e, REG_X0, COND_LE);
                         break;
                     case OP_GT:
-                        fprintf(out, "    cmp w1, w0\n");
-                        fprintf(out, "    cset w0, gt\n");
+                        emit_cmp_reg(e, false, REG_X1, REG_X0);
+                        emit_cset(e, REG_X0, COND_GT);
                         break;
                     case OP_GE:
-                        fprintf(out, "    cmp w1, w0\n");
-                        fprintf(out, "    cset w0, ge\n");
+                        emit_cmp_reg(e, false, REG_X1, REG_X0);
+                        emit_cset(e, REG_X0, COND_GE);
                         break;
                 }
             }
@@ -604,23 +611,23 @@ static void gen_node(ASTNode *node, FILE *out) {
         }
 
         case AST_EXPR_UNARY:
-            gen_node(node->unary.expr, out);
+            gen_node(node->unary.expr, e);
             switch (node->unary.op) {
                 case OP_NEG: {
                     Type *type = get_node_type(node->unary.expr);
                     if (type && type->kind == KIND_FLOAT) {
-                        fprintf(out, "    fneg s0, s0\n");
+                        emit_fneg(e, REG_S0, REG_S0);
                     } else {
-                        fprintf(out, "    neg w0, w0\n");
+                        emit_neg_reg(e, false, REG_X0, REG_X0);
                     }
                     break;
                 }
                 case OP_NOT:
-                    fprintf(out, "    mvn w0, w0\n");
+                    emit_mvn_reg(e, false, REG_X0, REG_X0);
                     break;
                 case OP_LNOT:
-                    fprintf(out, "    cmp w0, #0\n");
-                    fprintf(out, "    cset w0, eq\n");
+                    emit_cmp_imm(e, false, REG_X0, 0);
+                    emit_cset(e, REG_X0, COND_EQ);
                     break;
             }
             break;
@@ -629,25 +636,25 @@ static void gen_node(ASTNode *node, FILE *out) {
             Type *type = get_node_type(node->assign.left);
             int size = type_size(type);
 
-            gen_node(node->assign.right, out); // RHS -> s0/w0/x0
+            gen_node(node->assign.right, e); // RHS -> s0/w0/x0
             if (type && type->kind == KIND_FLOAT) {
-                fprintf(out, "    str s0, [sp, #-16]!\n");
-                gen_addr(node->assign.left, out); // LHS address -> x0
-                fprintf(out, "    ldr s1, [sp], #16\n");
-                fprintf(out, "    str s1, [x0]\n");
-            } else if (size <= 8) {
-                fprintf(out, "    str %s, [sp, #-16]!\n", (size == 8) ? "x0" : "w0");
-                gen_addr(node->assign.left, out); // LHS address -> x0
-                fprintf(out, "    ldr %s, [sp], #16\n", (size == 8) ? "x1" : "w1");
-                fprintf(out, "    str %s, [x0]\n", (size == 8) ? "x1" : "w1");
+                emit_fstr_preindex(e, REG_S0, REG_SP, -16);
+                gen_addr(node->assign.left, e); // LHS address -> x0
+                emit_fldr_postindex(e, REG_S1, REG_SP, 16);
+                emit_fstr_imm(e, REG_S1, REG_X0, 0);
+            } else if (size <= 8 && type && type->kind != KIND_STRUCT && type->kind != KIND_ARRAY) {
+                emit_str_preindex(e, size, REG_X0, REG_SP, -16);
+                gen_addr(node->assign.left, e); // LHS address -> x0
+                emit_ldr_postindex(e, size, REG_X1, REG_SP, 16);
+                emit_str_imm(e, size, REG_X1, REG_X0, 0);
             } else {
                 // Struct assignment copy
-                fprintf(out, "    str x0, [sp, #-16]!\n"); // RHS address
-                gen_addr(node->assign.left, out); // LHS address -> x0
-                fprintf(out, "    ldr x1, [sp], #16\n"); // RHS address -> x1
+                emit_str_preindex(e, 8, REG_X0, REG_SP, -16);
+                gen_addr(node->assign.left, e); // LHS address -> x0
+                emit_ldr_postindex(e, 8, REG_X1, REG_SP, 16); // RHS address -> x1
                 for (int i = 0; i < size; i += 4) {
-                    fprintf(out, "    ldr w2, [x1, #%d]\n", i);
-                    fprintf(out, "    str w2, [x0, #%d]\n", i);
+                    emit_ldr_imm(e, 4, REG_X2, REG_X1, i);
+                    emit_str_imm(e, 4, REG_X2, REG_X0, i);
                 }
             }
             break;
@@ -658,78 +665,76 @@ static void gen_node(ASTNode *node, FILE *out) {
         case AST_EXPR_INDEX: {
             Type *type = get_node_type(node);
             int size = type_size(type);
-            gen_addr(node, out); // address -> x0
+            gen_addr(node, e); // address -> x0
             if (type && type->kind == KIND_FLOAT) {
-                fprintf(out, "    ldr s0, [x0]\n");
-            } else if (size == 4) {
-                fprintf(out, "    ldr w0, [x0]\n");
-            } else if (size == 8) {
-                fprintf(out, "    ldr x0, [x0]\n");
+                emit_fldr_imm(e, REG_S0, REG_X0, 0);
+            } else if (type && type->kind != KIND_STRUCT && type->kind != KIND_ARRAY) {
+                emit_ldr_imm(e, size, REG_X0, REG_X0, 0);
             }
             break;
         }
 
         case AST_EXPR_ADDR:
-            gen_addr(node->addr.expr, out); // x0 = address
+            gen_addr(node->addr.expr, e); // x0 = address
             break;
 
         case AST_EXPR_DEREF: {
             Type *type = get_node_type(node);
             int size = type_size(type);
-            gen_node(node->deref.expr, out); // pointer value -> x0
+            gen_node(node->deref.expr, e); // pointer value -> x0
             if (type && type->kind == KIND_FLOAT) {
-                fprintf(out, "    ldr s0, [x0]\n");
-            } else if (size == 4) {
-                fprintf(out, "    ldr w0, [x0]\n");
-            } else if (size == 8) {
-                fprintf(out, "    ldr x0, [x0]\n");
+                emit_fldr_imm(e, REG_S0, REG_X0, 0);
+            } else if (type && type->kind != KIND_STRUCT && type->kind != KIND_ARRAY) {
+                emit_ldr_imm(e, size, REG_X0, REG_X0, 0);
             }
             break;
         }
 
         case AST_EXPR_NUM:
-            fprintf(out, "    mov w0, #%d\n", node->num.value);
+            emit_mov_imm(e, false, REG_X0, node->num.value);
             break;
 
         case AST_EXPR_FLOAT_LIT: {
-            int lbl = label_counter++;
-            fprintf(out, "    .section .rodata\n");
-            fprintf(out, "    .p2align 2\n");
-            fprintf(out, ".L.float.%d:\n", lbl);
-            fprintf(out, "    .float %f\n", node->float_lit.value);
-            fprintf(out, "    .text\n");
+            int data_lbl = emitter_new_label(e);
+            int skip_lbl = emitter_new_label(e);
 
-            fprintf(out, "    adrp x0, .L.float.%d\n", lbl);
-            fprintf(out, "    add x0, x0, :lo12:.L.float.%d\n", lbl);
-            fprintf(out, "    ldr s0, [x0]\n");
+            emit_b_label(e, skip_lbl);
+            emitter_define_label(e, data_lbl);
+            emit_float_data(e, node->float_lit.value);
+            emitter_define_label(e, skip_lbl);
+
+            emit_ldr_pc_relative_float(e, REG_S0, data_lbl);
             break;
         }
 
         case AST_EXPR_STRING_LIT: {
-            int lbl = label_counter++;
-            fprintf(out, "    .section .rodata\n");
-            fprintf(out, ".L.str.%d:\n", lbl);
-            fprintf(out, "    .asciz \"");
-            for (char *s = node->string_lit.value; *s; s++) {
-                if (*s == '\n') {
-                    fprintf(out, "\\n");
-                } else {
-                    fputc(*s, out);
-                }
-            }
-            fprintf(out, "\"\n");
-            fprintf(out, "    .text\n");
+            int data_lbl = emitter_new_label(e);
+            int skip_lbl = emitter_new_label(e);
 
-            fprintf(out, "    adrp x0, .L.str.%d\n", lbl);
-            fprintf(out, "    add x0, x0, :lo12:.L.str.%d\n", lbl);
+            emit_b_label(e, skip_lbl);
+            emitter_define_label(e, data_lbl);
+            emit_string_data(e, node->string_lit.value);
+            emitter_define_label(e, skip_lbl);
+
+            emit_adr(e, REG_X0, data_lbl);
             break;
         }
     }
 }
 
 void generate_arm64(ASTNode *node, FILE *out) {
+    Emitter e;
+    emitter_init(&e, out, false); // Text Assembly mode
+
     fprintf(out, "// Generated by ncc (Nano C Compiler)\n");
     fprintf(out, "    .text\n");
 
-    gen_node(node, out);
+    gen_node(node, &e);
+
+    emitter_free(&e);
+}
+
+void generate_arm64_binary(ASTNode *node, Emitter *e) {
+    gen_node(node, e);
+    emitter_resolve_relocs(e);
 }

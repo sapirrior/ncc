@@ -1,12 +1,11 @@
 CC = clang
-CFLAGS = -std=c99 -Wall -Wextra -Iinclude -g
+CFLAGS = -std=c11 -Wall -Wextra -Iinclude -g
 
 # Source files
 SRCS = src/main.c \
-       src/lexer.c \
-       src/parser.c \
-       src/codegen/codegen.c \
-       src/codegen/arm64.c
+       src/argparse.c \
+       src/compiler.c \
+       src/runner.c
 
 BIN = ncc
 

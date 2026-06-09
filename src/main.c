@@ -1,185 +1,66 @@
-#include "common.h"
-#include "lexer.h"
-#include "parser.h"
-#include "codegen.h"
-#include <stdarg.h>
-#include <dlfcn.h>
+#include "driver.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
-void error(const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    fprintf(stderr, "Error: ");
-    vfprintf(stderr, fmt, ap);
-    fprintf(stderr, "\n");
-    va_end(ap);
-    exit(1);
-}
-
-void error_at(const char *filename, int line, int col, const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    fprintf(stderr, "%s:%d:%d: Error: ", filename, line, col);
-    vfprintf(stderr, fmt, ap);
-    fprintf(stderr, "\n");
-    va_end(ap);
-    exit(1);
-}
-
-void *xmalloc(size_t size) {
-    void *ptr = malloc(size);
-    if (!ptr) {
-        error("Out of memory");
-    }
-    return ptr;
-}
-
-char *xstrdup(const char *s) {
-    char *ptr = strdup(s);
-    if (!ptr) {
-        error("Out of memory");
-    }
-    return ptr;
-}
-
-static char *read_file(const char *path) {
-    FILE *fp = fopen(path, "rb");
-    if (!fp) {
-        error("Cannot open file: %s", path);
-    }
-
-    fseek(fp, 0, SEEK_END);
-    long size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-
-    char *buf = xmalloc(size + 1);
-    size_t read_bytes = fread(buf, 1, size, fp);
-    buf[read_bytes] = '\0';
-    fclose(fp);
-    return buf;
-}
-
 int main(int argc, char **argv) {
-    char *input_path = NULL;
-    char *output_path = NULL;
-    char *target = "arm64";
+    Options opts;
+    options_init(&opts);
 
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-o") == 0) {
-            if (i + 1 >= argc) {
-                error("Missing argument for -o");
-            }
-            output_path = argv[++i];
-        } else if (strcmp(argv[i], "-t") == 0) {
-            if (i + 1 >= argc) {
-                error("Missing argument for -t");
-            }
-            target = argv[++i];
-        } else if (argv[i][0] == '-') {
-            error("Unknown option: %s", argv[i]);
-        } else {
-            if (input_path) {
-                error("Multiple input files specified");
-            }
-            input_path = argv[i];
+    if (!parse_arguments(argc, argv, &opts)) {
+        if (argc < 2) {
+            fprintf(stderr, "Nano C Compiler (ncc) driver - C11 version\n");
+            fprintf(stderr, "Usage:\n");
+            fprintf(stderr, "  Compile: %s [options] <source-files> -o <output-binary>\n", argv[0]);
+            fprintf(stderr, "  Run (JIT): %s [options] <source-files> [--] [program-arguments]\n", argv[0]);
         }
+        options_free(&opts);
+        return 1;
     }
 
-    if (!input_path) {
-        error("No input file specified");
+    // Select the appropriate compiler (clang/clang++ or gcc/g++)
+    const char *compiler = select_compiler(opts.is_cpp);
+    if (!compiler) {
+        fprintf(stderr, "Error: No suitable C/C++ compiler found in PATH\n");
+        options_free(&opts);
+        return 1;
     }
 
-    if (!set_codegen_target(target)) {
-        error("Unsupported target: %s", target);
+    bool is_run_mode = (opts.output_file == NULL);
+    char tmp_exe_path[PATH_MAX] = {0};
+    char *effective_output = opts.output_file;
+
+    if (is_run_mode) {
+        // Setup temporary file inside workspace/current directory
+        snprintf(tmp_exe_path, sizeof(tmp_exe_path), "./.ncc_tmp_run_XXXXXX");
+        int fd = mkstemp(tmp_exe_path);
+        if (fd == -1) {
+            perror("Error: Failed to create temporary file");
+            options_free(&opts);
+            return 1;
+        }
+        close(fd);
+        effective_output = tmp_exe_path;
+
+        // Register signal handlers for cleanup
+        setup_signal_handlers(tmp_exe_path);
     }
 
-    char *source = read_file(input_path);
-    Token *tokens = tokenize(input_path, source);
-
-    ASTNode *ast = parse(tokens);
+    // Compile the source files
+    int compile_code = compile_sources(&opts, compiler, effective_output);
+    if (compile_code != 0) {
+        cleanup_temp_file();
+        options_free(&opts);
+        return compile_code;
+    }
 
     int exit_code = 0;
-
-    if (output_path) {
-        // Compile-to-file mode
-        const char *ext = strrchr(output_path, '.');
-        bool is_assembly = ext && strcmp(ext, ".s") == 0;
-
-        if (is_assembly) {
-            FILE *out = fopen(output_path, "w");
-            if (!out) {
-                error("Cannot open output file: %s", output_path);
-            }
-            generate_code(ast, out);
-            fclose(out);
-        } else {
-            // Compile to temporary assembly first
-            const char *tmp_assembly = ".ncc_tmp.s";
-            FILE *out = fopen(tmp_assembly, "w");
-            if (!out) {
-                error("Cannot open temporary assembly file");
-            }
-            generate_code(ast, out);
-            fclose(out);
-
-            // Invoke clang to assemble/link to target binary
-            char cmd[512];
-            snprintf(cmd, sizeof(cmd), "clang %s -o %s", tmp_assembly, output_path);
-            int status = system(cmd);
-            unlink(tmp_assembly);
-
-            if (status != 0) {
-                error("Assembly/linking failed with status %d", status);
-            }
-        }
-    } else {
-        // JIT (Run-in-memory) mode
-        const char *tmp_assembly = ".ncc_tmp.s";
-        const char *tmp_shared = "./.ncc_tmp.so";
-
-        FILE *out = fopen(tmp_assembly, "w");
-        if (!out) {
-            error("Cannot open temporary assembly file");
-        }
-        generate_code(ast, out);
-        fclose(out);
-
-        // Compile to a temporary shared library
-        char cmd[512];
-        snprintf(cmd, sizeof(cmd), "clang -shared -fPIC %s -o %s", tmp_assembly, tmp_shared);
-        int status = system(cmd);
-        unlink(tmp_assembly);
-
-        if (status != 0) {
-            error("Assembly/linking to shared library failed with status %d", status);
-        }
-
-        // Dynamically load the library
-        void *handle = dlopen(tmp_shared, RTLD_NOW);
-        if (!handle) {
-            unlink(tmp_shared);
-            error("Failed to load JIT library: %s", dlerror());
-        }
-
-        // Look up main
-        int (*main_fn)(void) = dlsym(handle, "main");
-        if (!main_fn) {
-            dlclose(handle);
-            unlink(tmp_shared);
-            error("JIT library missing 'main' symbol: %s", dlerror());
-        }
-
-        // Execute main in memory
-        exit_code = main_fn();
-
-        // Cleanup
-        dlclose(handle);
-        unlink(tmp_shared);
+    if (is_run_mode) {
+        // Run the compiled target forwarding arguments
+        exit_code = run_target(tmp_exe_path, opts.run_args, opts.run_count, opts.verbose);
+        cleanup_temp_file();
     }
 
-    free_ast(ast);
-    free_tokens(tokens);
-    free(source);
-
+    options_free(&opts);
     return exit_code;
 }

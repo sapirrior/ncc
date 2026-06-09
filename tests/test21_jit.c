@@ -1,3 +1,6 @@
+// Expected: 77
+#include <stdio.h>
+
 int main() {
     float x = 2.5;
     float y = 4.0;

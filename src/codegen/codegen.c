@@ -29,6 +29,17 @@ void generate_code(ASTNode *node, FILE *out) {
     }
 }
 
+void generate_code_binary(ASTNode *node, struct Emitter *e) {
+    switch (current_target) {
+        case TARGET_ARM64:
+            generate_arm64_binary(node, e);
+            break;
+        case TARGET_X86_64:
+            error("x86-64 target backend does not support binary JIT yet!");
+            break;
+    }
+}
+
 // Temporary stub for x86_64 backend
 void generate_x86_64(ASTNode *node, FILE *out) {
     (void)node;

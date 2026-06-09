@@ -9,3 +9,7 @@ tests/*.out
 *~
 *.swp
 .DS_Store
+
+# Temporary JIT/run artifacts
+.ncc_tmp*
+tests/*.bin
