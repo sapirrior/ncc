@@ -18,10 +18,66 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // If one of the source files is "-", we read from stdin and write to a temp file
+    char tmp_stdin_path[PATH_MAX] = {0};
+    bool has_stdin_source = false;
+    for (int i = 0; i < opts.source_count; i++) {
+        if (strcmp(opts.source_files[i], "-") == 0) {
+            has_stdin_source = true;
+            break;
+        }
+    }
+
+    if (has_stdin_source) {
+        char tmp_base[PATH_MAX] = "./.ncc_tmp_stdin_XXXXXX";
+        int fd = mkstemp(tmp_base);
+        if (fd == -1) {
+            perror("Error: Failed to create temporary file for stdin");
+            options_free(&opts);
+            return 1;
+        }
+        close(fd);
+
+        snprintf(tmp_stdin_path, sizeof(tmp_stdin_path), "%s%s", tmp_base, opts.is_cpp ? ".cpp" : ".c");
+        if (rename(tmp_base, tmp_stdin_path) != 0) {
+            perror("Error: Failed to rename temporary file for stdin");
+            unlink(tmp_base);
+            options_free(&opts);
+            return 1;
+        }
+
+        FILE *tmp_fp = fopen(tmp_stdin_path, "w");
+        if (!tmp_fp) {
+            perror("Error: Failed to open temporary file for stdin");
+            unlink(tmp_stdin_path);
+            options_free(&opts);
+            return 1;
+        }
+
+        if (opts.stdin_code) {
+            fwrite(opts.stdin_code, 1, strlen(opts.stdin_code), tmp_fp);
+        } else {
+            char buf[4096];
+            size_t bytes;
+            while ((bytes = fread(buf, 1, sizeof(buf), stdin)) > 0) {
+                fwrite(buf, 1, bytes, tmp_fp);
+            }
+        }
+        fclose(tmp_fp);
+
+        // Replace "-" with the temp file path in source_files
+        for (int i = 0; i < opts.source_count; i++) {
+            if (strcmp(opts.source_files[i], "-") == 0) {
+                opts.source_files[i] = tmp_stdin_path;
+            }
+        }
+    }
+
     // Select the appropriate compiler (clang/clang++ or gcc/g++)
     const char *compiler = select_compiler(opts.is_cpp);
     if (!compiler) {
         fprintf(stderr, "Error: No suitable C/C++ compiler found in PATH\n");
+        if (has_stdin_source) unlink(tmp_stdin_path);
         options_free(&opts);
         return 1;
     }
@@ -36,6 +92,7 @@ int main(int argc, char **argv) {
         int fd = mkstemp(tmp_exe_path);
         if (fd == -1) {
             perror("Error: Failed to create temporary file");
+            if (has_stdin_source) unlink(tmp_stdin_path);
             options_free(&opts);
             return 1;
         }
@@ -48,6 +105,9 @@ int main(int argc, char **argv) {
 
     // Compile the source files
     int compile_code = compile_sources(&opts, compiler, effective_output);
+    if (has_stdin_source) {
+        unlink(tmp_stdin_path);
+    }
     if (compile_code != 0) {
         cleanup_temp_file();
         options_free(&opts);

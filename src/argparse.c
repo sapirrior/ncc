@@ -13,6 +13,7 @@ void options_init(Options *opts) {
     opts->output_file = NULL;
     opts->verbose = false;
     opts->is_cpp = false;
+    opts->stdin_code = NULL;
 }
 
 void options_free(Options *opts) {
@@ -57,6 +58,14 @@ bool parse_arguments(int argc, char **argv, Options *opts) {
 
         if (strcmp(argv[i], "--") == 0) {
             collecting_run_args = true;
+            continue;
+        }
+
+        if (strcmp(argv[i], "-") == 0) {
+            opts->source_files[opts->source_count++] = argv[i];
+            if (i + 1 < argc) {
+                opts->stdin_code = argv[++i];
+            }
             continue;
         }
 

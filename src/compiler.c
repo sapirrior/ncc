@@ -26,6 +26,9 @@ char *find_in_path(const char *cmd) {
 
 const char *select_compiler(bool is_cpp) {
     if (is_cpp) {
+        const char *env_cxx = getenv("NCC_CXX");
+        if (env_cxx) return env_cxx;
+
         const char *cpp_compilers[] = {"clang++", "g++", "c++"};
         for (size_t i = 0; i < sizeof(cpp_compilers)/sizeof(cpp_compilers[0]); i++) {
             if (find_in_path(cpp_compilers[i])) {
@@ -33,6 +36,9 @@ const char *select_compiler(bool is_cpp) {
             }
         }
     } else {
+        const char *env_cc = getenv("NCC_CC");
+        if (env_cc) return env_cc;
+
         const char *c_compilers[] = {"clang", "gcc", "cc"};
         for (size_t i = 0; i < sizeof(c_compilers)/sizeof(c_compilers[0]); i++) {
             if (find_in_path(c_compilers[i])) {

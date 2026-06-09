@@ -18,6 +18,7 @@ typedef struct {
     char *output_file;
     bool verbose;
     bool is_cpp;
+    char *stdin_code;
 } Options;
 
 // Initialize and free options
