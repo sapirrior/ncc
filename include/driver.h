@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <limits.h>
+#include <stddef.h>
 
 // Struct to hold parsed command-line options
 typedef struct {
@@ -43,5 +44,8 @@ int compile_sources(const Options *opts, const char *compiler, const char *effec
 void setup_signal_handlers(char *temp_path);
 void cleanup_temp_file(void);
 int run_target(const char *exe_path, char **run_args, int run_count, bool verbose);
+
+// Caching support
+bool find_cached_binary(const Options *opts, const char *compiler, char *cached_path_out, size_t max_len);
 
 #endif // DRIVER_H

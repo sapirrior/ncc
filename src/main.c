@@ -155,33 +155,31 @@ int main(int argc, char **argv) {
     bool is_run_mode = (opts.output_file == NULL);
     char tmp_exe_path[PATH_MAX] = {0};
     char *effective_output = opts.output_file;
+    bool use_cache = false;
 
     if (is_run_mode) {
-        // Setup temporary file inside workspace/current directory
-        snprintf(tmp_exe_path, sizeof(tmp_exe_path), "./.ncc_tmp_run_XXXXXX");
-        int fd = mkstemp(tmp_exe_path);
-        if (fd == -1) {
-            perror("Error: Failed to create temporary file");
-            if (has_stdin_source) unlink(tmp_stdin_path);
-            for (int i = 0; i < opts.source_count; i++) {
-                if (temp_shebang_files[i]) {
-                    unlink(temp_shebang_files[i]);
-                    free(temp_shebang_files[i]);
-                }
-            }
-            free(temp_shebang_files);
-            options_free(&opts);
-            return 1;
+        if (find_cached_binary(&opts, compiler, tmp_exe_path, sizeof(tmp_exe_path))) {
+            use_cache = true;
         }
-        close(fd);
         effective_output = tmp_exe_path;
 
-        // Register signal handlers for cleanup
-        setup_signal_handlers(tmp_exe_path);
+        if (!use_cache) {
+            // Register signal handlers for cleanup of the corrupt cached binary if compile gets interrupted
+            setup_signal_handlers(tmp_exe_path);
+        }
     }
 
-    // Compile the source files
-    int compile_code = compile_sources(&opts, compiler, effective_output);
+    int compile_code = 0;
+    if (!use_cache) {
+        // Compile the source files directly to cache
+        compile_code = compile_sources(&opts, compiler, effective_output);
+
+        // Disable signal handlers because compilation successfully finished
+        if (is_run_mode) {
+            setup_signal_handlers(NULL);
+        }
+    }
+
     if (has_stdin_source) {
         unlink(tmp_stdin_path);
     }
@@ -195,7 +193,10 @@ int main(int argc, char **argv) {
     free(temp_shebang_files);
 
     if (compile_code != 0) {
-        cleanup_temp_file();
+        // Compilation failed, delete the partial/failed cached file
+        if (is_run_mode) {
+            unlink(tmp_exe_path);
+        }
         options_free(&opts);
         return compile_code;
     }
@@ -204,7 +205,6 @@ int main(int argc, char **argv) {
     if (is_run_mode) {
         // Run the compiled target forwarding arguments
         exit_code = run_target(tmp_exe_path, opts.run_args, opts.run_count, opts.verbose);
-        cleanup_temp_file();
     }
 
     options_free(&opts);

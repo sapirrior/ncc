@@ -5,7 +5,8 @@ CFLAGS = -std=c11 -Wall -Wextra -Iinclude -g
 SRCS = src/main.c \
        src/argparse.c \
        src/compiler.c \
-       src/runner.c
+       src/runner.c \
+       src/cache.c
 
 BIN = ncc
 
