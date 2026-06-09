@@ -42,6 +42,37 @@ Token *tokenize(const char *filename, const char *source) {
             continue;
         }
 
+        // String literals
+        if (*p == '"') {
+            p++; col++;
+            const char *start = p;
+            int start_col = col;
+            while (*p && *p != '"') {
+                if (*p == '\n') {
+                    line++;
+                    col = 1;
+                } else {
+                    col++;
+                }
+                p++;
+            }
+            int len = p - start;
+            char *val = xmalloc(len + 1);
+            strncpy(val, start, len);
+            val[len] = '\0';
+
+            if (*p == '"') {
+                p++; col++; // Consume closing quote
+            } else {
+                error_at(filename, line, col, "Unterminated string literal");
+            }
+
+            cur->next = new_token(TOKEN_STRING, val, line, start_col);
+            free(val);
+            cur = cur->next;
+            continue;
+        }
+
         // Parentheses, Braces, Brackets, Comma, Semicolon, Dot, Amp
         if (*p == '(') {
             cur->next = new_token(TOKEN_LPAREN, NULL, line, col);
@@ -192,18 +223,24 @@ Token *tokenize(const char *filename, const char *source) {
             continue;
         }
 
-        // Numeric literal
-        if (isdigit((unsigned char)*p)) {
+        // Numeric literal (integer or float)
+        if (isdigit((unsigned char)*p) || (*p == '.' && isdigit((unsigned char)p[1]))) {
             const char *start = p;
             int start_col = col;
-            while (isdigit((unsigned char)*p)) {
+            bool is_float = false;
+            while (isdigit((unsigned char)*p) || *p == '.') {
+                if (*p == '.') {
+                    is_float = true;
+                }
                 p++; col++;
             }
             int len = p - start;
             char *val = xmalloc(len + 1);
             strncpy(val, start, len);
             val[len] = '\0';
-            cur->next = new_token(TOKEN_NUM, val, line, start_col);
+
+            TokenType type = is_float ? TOKEN_FLOAT_LIT : TOKEN_NUM;
+            cur->next = new_token(type, val, line, start_col);
             free(val);
             cur = cur->next;
             continue;
@@ -226,6 +263,8 @@ Token *tokenize(const char *filename, const char *source) {
                 type = TOKEN_INT;
             } else if (strcmp(val, "_Bool") == 0) {
                 type = TOKEN_BOOL;
+            } else if (strcmp(val, "float") == 0) {
+                type = TOKEN_FLOAT;
             } else if (strcmp(val, "struct") == 0) {
                 type = TOKEN_STRUCT;
             } else if (strcmp(val, "return") == 0) {
@@ -266,6 +305,7 @@ void print_tokens(Token *tok) {
             case TOKEN_EOF: printf("EOF\n"); break;
             case TOKEN_INT: printf("KEYWORD: int\n"); break;
             case TOKEN_BOOL: printf("KEYWORD: _Bool\n"); break;
+            case TOKEN_FLOAT: printf("KEYWORD: float\n"); break;
             case TOKEN_STRUCT: printf("KEYWORD: struct\n"); break;
             case TOKEN_RETURN: printf("KEYWORD: return\n"); break;
             case TOKEN_IF: printf("KEYWORD: if\n"); break;
@@ -277,6 +317,8 @@ void print_tokens(Token *tok) {
             case TOKEN_CONTINUE: printf("KEYWORD: continue\n"); break;
             case TOKEN_IDENT: printf("IDENTIFIER: %s\n", tok->value); break;
             case TOKEN_NUM: printf("NUMBER: %s\n", tok->value); break;
+            case TOKEN_FLOAT_LIT: printf("FLOAT_LITERAL: %s\n", tok->value); break;
+            case TOKEN_STRING: printf("STRING_LITERAL: \"%s\"\n", tok->value); break;
             case TOKEN_LPAREN: printf("LPAREN: (\n"); break;
             case TOKEN_RPAREN: printf("RPAREN: )\n"); break;
             case TOKEN_LBRACE: printf("LBRACE: {\n"); break;

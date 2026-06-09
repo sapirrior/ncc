@@ -6,6 +6,7 @@
 typedef enum {
     KIND_INT,
     KIND_BOOL,
+    KIND_FLOAT,
     KIND_ARRAY,
     KIND_STRUCT,
     KIND_PTR
@@ -59,6 +60,8 @@ typedef enum {
     AST_EXPR_ASSIGN,
     AST_EXPR_VAR,
     AST_EXPR_NUM,
+    AST_EXPR_FLOAT_LIT,
+    AST_EXPR_STRING_LIT,
     AST_EXPR_CALL,
     AST_EXPR_MEMBER,
     AST_EXPR_INDEX,
@@ -167,8 +170,8 @@ typedef struct ASTNode {
 
         // Assignment expression
         struct {
-            struct ASTNode *left; // LHS (can be var, index, member access)
-            struct ASTNode *right; // RHS
+            struct ASTNode *left;
+            struct ASTNode *right;
         } assign;
 
         // Member access: expr.member
@@ -202,12 +205,23 @@ typedef struct ASTNode {
         struct {
             int value;
         } num;
+
+        // Float literal
+        struct {
+            double value;
+        } float_lit;
+
+        // String literal
+        struct {
+            char *value;
+        } string_lit;
     };
 } ASTNode;
 
 // Type helper prototypes
 Type *new_type_int(void);
 Type *new_type_bool(void);
+Type *new_type_float(void);
 Type *new_type_array(Type *elem_type, int size);
 Type *new_type_struct(const char *name, Field *fields, int field_count);
 Type *new_type_ptr(Type *ptr_to);
@@ -240,6 +254,8 @@ ASTNode *new_ast_addr(ASTNode *expr);
 ASTNode *new_ast_deref(ASTNode *expr);
 ASTNode *new_ast_var(const char *name);
 ASTNode *new_ast_num(int value);
+ASTNode *new_ast_float_lit(double value);
+ASTNode *new_ast_string_lit(const char *value);
 
 void free_ast(ASTNode *node);
 void print_ast(ASTNode *node, int indent);

@@ -13,6 +13,12 @@ Type *new_type_bool(void) {
     return t;
 }
 
+Type *new_type_float(void) {
+    Type *t = xmalloc(sizeof(Type));
+    t->kind = KIND_FLOAT;
+    return t;
+}
+
 Type *new_type_array(Type *elem_type, int size) {
     Type *t = xmalloc(sizeof(Type));
     t->kind = KIND_ARRAY;
@@ -42,6 +48,7 @@ int type_size(Type *type) {
     switch (type->kind) {
         case KIND_INT: return 4;
         case KIND_BOOL: return 4;
+        case KIND_FLOAT: return 4;
         case KIND_PTR: return 8;
         case KIND_ARRAY: return type_size(type->array.elem_type) * type->array.size;
         case KIND_STRUCT: {
@@ -66,6 +73,7 @@ int type_align(Type *type) {
     switch (type->kind) {
         case KIND_INT: return 4;
         case KIND_BOOL: return 4;
+        case KIND_FLOAT: return 4;
         case KIND_PTR: return 8;
         case KIND_ARRAY: return type_align(type->array.elem_type);
         case KIND_STRUCT: {
@@ -87,6 +95,7 @@ void free_type(Type *type) {
     switch (type->kind) {
         case KIND_INT:
         case KIND_BOOL:
+        case KIND_FLOAT:
             break;
         case KIND_ARRAY:
             free_type(type->array.elem_type);
@@ -113,6 +122,7 @@ Type *copy_type(Type *type) {
     switch (type->kind) {
         case KIND_INT:
         case KIND_BOOL:
+        case KIND_FLOAT:
             break;
         case KIND_ARRAY:
             t->array.elem_type = copy_type(type->array.elem_type);
@@ -348,6 +358,20 @@ ASTNode *new_ast_num(int value) {
     return node;
 }
 
+ASTNode *new_ast_float_lit(double value) {
+    ASTNode *node = xmalloc(sizeof(ASTNode));
+    node->type = AST_EXPR_FLOAT_LIT;
+    node->float_lit.value = value;
+    return node;
+}
+
+ASTNode *new_ast_string_lit(const char *value) {
+    ASTNode *node = xmalloc(sizeof(ASTNode));
+    node->type = AST_EXPR_STRING_LIT;
+    node->string_lit.value = xstrdup(value);
+    return node;
+}
+
 void free_ast(ASTNode *node) {
     if (!node) return;
     switch (node->type) {
@@ -454,6 +478,11 @@ void free_ast(ASTNode *node) {
             free(node->var.name);
             break;
         case AST_EXPR_NUM:
+            break;
+        case AST_EXPR_FLOAT_LIT:
+            break;
+        case AST_EXPR_STRING_LIT:
+            free(node->string_lit.value);
             break;
     }
     free(node);
@@ -574,6 +603,12 @@ void print_ast(ASTNode *node, int indent) {
         case AST_EXPR_NUM:
             printf("NumExpr: %d\n", node->num.value);
             break;
+        case AST_EXPR_FLOAT_LIT:
+            printf("FloatLiteralExpr: %f\n", node->float_lit.value);
+            break;
+        case AST_EXPR_STRING_LIT:
+            printf("StringLiteralExpr: \"%s\"\n", node->string_lit.value);
+            break;
     }
 }
 
@@ -643,6 +678,18 @@ static ASTNode *parse_primary_basic(void) {
         int val = atoi(tok->value);
         consume(TOKEN_NUM, "Expected number");
         return new_ast_num(val);
+    }
+
+    if (tok->type == TOKEN_FLOAT_LIT) {
+        double val = atof(tok->value);
+        consume(TOKEN_FLOAT_LIT, "Expected float literal");
+        return new_ast_float_lit(val);
+    }
+
+    if (tok->type == TOKEN_STRING) {
+        char *val = tok->value;
+        consume(TOKEN_STRING, "Expected string literal");
+        return new_ast_string_lit(val);
     }
 
     if (tok->type == TOKEN_IDENT) {
@@ -768,6 +815,8 @@ static Type *parse_type_specifier(void) {
         t = new_type_int();
     } else if (match(TOKEN_BOOL)) {
         t = new_type_bool();
+    } else if (match(TOKEN_FLOAT)) {
+        t = new_type_float();
     } else if (match(TOKEN_STRUCT)) {
         if (tok->type != TOKEN_IDENT) {
             error_at("input", tok->line, tok->col, "Expected struct tag identifier");
@@ -849,7 +898,7 @@ static ASTNode *parse_statement(void) {
         consume(TOKEN_LPAREN, "Expected '(' after for");
 
         ASTNode *init = NULL;
-        if (tok->type == TOKEN_INT || tok->type == TOKEN_BOOL || tok->type == TOKEN_STRUCT) {
+        if (tok->type == TOKEN_INT || tok->type == TOKEN_BOOL || tok->type == TOKEN_FLOAT || tok->type == TOKEN_STRUCT) {
             Type *base_type = parse_type_specifier();
             if (tok->type != TOKEN_IDENT) {
                 error_at("input", tok->line, tok->col, "Expected variable identifier");
@@ -909,7 +958,7 @@ static ASTNode *parse_statement(void) {
     }
 
     // Struct definition at statement level: struct Tag { members... };
-    if (tok->type == TOKEN_STRUCT && tok->next->type == TOKEN_IDENT && tok->next->next->type == TOKEN_LBRACE) {
+    if (tok->type == TOKEN_STRUCT && tok->next && tok->next->type == TOKEN_IDENT && tok->next->next && tok->next->next->type == TOKEN_LBRACE) {
         consume(TOKEN_STRUCT, "Expected struct");
         char *tag = tok->value;
         consume(TOKEN_IDENT, "Expected tag");
@@ -944,8 +993,8 @@ static ASTNode *parse_statement(void) {
         return new_ast_struct_def(tag, fields, field_count);
     }
 
-    // Variable declaration? e.g. int x; struct Point p; int arr[10];
-    if (tok->type == TOKEN_INT || tok->type == TOKEN_BOOL || tok->type == TOKEN_STRUCT) {
+    // Variable declaration? e.g. int x; struct Point p; float f;
+    if (tok->type == TOKEN_INT || tok->type == TOKEN_BOOL || tok->type == TOKEN_FLOAT || tok->type == TOKEN_STRUCT) {
         Type *base_type = parse_type_specifier();
         if (tok->type != TOKEN_IDENT) {
             error_at("input", tok->line, tok->col, "Expected variable name identifier");

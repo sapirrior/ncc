@@ -129,13 +129,17 @@ static Type *get_node_type(ASTNode *node) {
             return get_node_type(node->deref.expr)->ptr_to;
         case AST_EXPR_NUM:
             return new_type_int();
+        case AST_EXPR_FLOAT_LIT:
+            return new_type_float();
+        case AST_EXPR_STRING_LIT:
+            return new_type_ptr(new_type_int());
         case AST_EXPR_CALL:
             return new_type_int();
         case AST_EXPR_BINARY:
             if (node->binary.op >= OP_EQ && node->binary.op <= OP_GE) {
                 return new_type_bool();
             }
-            return new_type_int();
+            return get_node_type(node->binary.left); // type propagates
         case AST_EXPR_UNARY:
             if (node->unary.op == OP_LNOT) {
                 return new_type_bool();
@@ -162,7 +166,7 @@ static void gen_addr(ASTNode *node, FILE *out) {
         }
 
         case AST_EXPR_MEMBER: {
-            gen_addr(node->member.expr, out); // x0 = struct address
+            gen_addr(node->member.expr, out);
 
             Type *struct_type = get_node_type(node->member.expr);
             if (struct_type->kind == KIND_PTR) {
@@ -191,12 +195,12 @@ static void gen_addr(ASTNode *node, FILE *out) {
         }
 
         case AST_EXPR_INDEX: {
-            gen_addr(node->index.expr, out); // x0 = array base address
-            fprintf(out, "    str x0, [sp, #-16]!\n"); // push base
+            gen_addr(node->index.expr, out);
+            fprintf(out, "    str x0, [sp, #-16]!\n");
 
-            gen_node(node->index.index, out); // evaluate index -> w0
-            fprintf(out, "    sxtw x0, w0\n"); // sign-extend index -> x0
-            fprintf(out, "    ldr x1, [sp], #16\n"); // pop base -> x1
+            gen_node(node->index.index, out);
+            fprintf(out, "    sxtw x0, w0\n");
+            fprintf(out, "    ldr x1, [sp], #16\n");
 
             Type *arr_type = get_node_type(node->index.expr);
             if (arr_type->kind == KIND_PTR) {
@@ -216,7 +220,7 @@ static void gen_addr(ASTNode *node, FILE *out) {
         }
 
         case AST_EXPR_DEREF:
-            gen_node(node->deref.expr, out); // Pointer value -> x0
+            gen_node(node->deref.expr, out);
             break;
 
         default:
@@ -238,17 +242,14 @@ static void gen_node(ASTNode *node, FILE *out) {
         case AST_FUNC_DECL: {
             clear_locals();
 
-            // Register parameter offsets
             for (int i = 0; i < node->func.param_count; i++) {
                 add_local(node->func.params[i], node->func.param_types[i]);
             }
 
-            // Register local variable offsets recursively
             for (int i = 0; i < node->func.stmt_count; i++) {
                 register_locals(node->func.stmts[i]);
             }
 
-            // Aligned stack allocation
             int total_size = current_stack_offset;
             int stack_alloc = ((total_size + 15) / 16) * 16;
 
@@ -263,11 +264,13 @@ static void gen_node(ASTNode *node, FILE *out) {
                 fprintf(out, "    sub sp, sp, #%d\n", stack_alloc);
             }
 
-            // Copy incoming parameters into stack slots
+            // Copy incoming parameters
             for (int i = 0; i < node->func.param_count; i++) {
                 Symbol *sym = find_local(node->func.params[i]);
                 int size = type_size(sym->type);
-                if (size == 4) {
+                if (sym->type->kind == KIND_FLOAT) {
+                    fprintf(out, "    str s%d, [x29, #-%d]\n", i, sym->offset);
+                } else if (size == 4) {
                     fprintf(out, "    str w%d, [x29, #-%d]\n", i, sym->offset);
                 } else if (size == 8) {
                     fprintf(out, "    str x%d, [x29, #-%d]\n", i, sym->offset);
@@ -307,14 +310,16 @@ static void gen_node(ASTNode *node, FILE *out) {
             Symbol *sym = find_local(node->decl_stmt.name);
             int size = type_size(sym->type);
             if (node->decl_stmt.init) {
-                gen_node(node->decl_stmt.init, out); // Evaluates to w0/x0
+                gen_node(node->decl_stmt.init, out); // Evaluates -> w0/x0/s0
                 fprintf(out, "    sub x1, x29, #%d\n", sym->offset);
-                if (size == 4) {
+                if (sym->type->kind == KIND_FLOAT) {
+                    fprintf(out, "    str s0, [x1]\n");
+                } else if (size == 4) {
                     fprintf(out, "    str w0, [x1]\n");
                 } else if (size == 8) {
                     fprintf(out, "    str x0, [x1]\n");
                 } else {
-                    // Struct/array copy initializer
+                    // Struct/array copy
                     fprintf(out, "    mov x1, x0\n");
                     fprintf(out, "    sub x0, x29, #%d\n", sym->offset);
                     for (int i = 0; i < size; i += 4) {
@@ -323,7 +328,6 @@ static void gen_node(ASTNode *node, FILE *out) {
                     }
                 }
             } else {
-                // Initialize allocation to 0
                 fprintf(out, "    sub x0, x29, #%d\n", sym->offset);
                 for (int i = 0; i < size; i += 4) {
                     fprintf(out, "    str wzr, [x0, #%d]\n", i);
@@ -438,17 +442,37 @@ static void gen_node(ASTNode *node, FILE *out) {
         }
 
         case AST_EXPR_CALL: {
+            bool is_printf = (strcmp(node->call.name, "printf") == 0);
+
+            // Evaluate arguments and push them to stack
             for (int i = 0; i < node->call.arg_count; i++) {
+                Type *arg_type = get_node_type(node->call.args[i]);
                 gen_node(node->call.args[i], out);
-                fprintf(out, "    str x0, [sp, #-16]!\n"); // push as 64-bit to be safe
-            }
-            for (int i = node->call.arg_count - 1; i >= 0; i--) {
-                if (i < 8) {
-                    fprintf(out, "    ldr x%d, [sp], #16\n", i);
+                if (arg_type && arg_type->kind == KIND_FLOAT) {
+                    fprintf(out, "    str s0, [sp, #-16]!\n"); // push float
                 } else {
-                    error("ncc supports up to 8 arguments");
+                    fprintf(out, "    str x0, [sp, #-16]!\n"); // push integer/pointer
                 }
             }
+
+            int int_arg_idx = 0;
+            int float_arg_idx = 0;
+
+            // Pop arguments in reverse order and assign to calling convention registers
+            for (int i = node->call.arg_count - 1; i >= 0; i--) {
+                Type *arg_type = get_node_type(node->call.args[i]);
+                if (arg_type && arg_type->kind == KIND_FLOAT) {
+                    fprintf(out, "    ldr s16, [sp], #16\n");
+                    if (is_printf) {
+                        fprintf(out, "    fcvt d%d, s16\n", float_arg_idx++);
+                    } else {
+                        fprintf(out, "    fmov s%d, s16\n", float_arg_idx++);
+                    }
+                } else {
+                    fprintf(out, "    ldr x%d, [sp], #16\n", int_arg_idx++);
+                }
+            }
+
             fprintf(out, "    bl %s\n", node->call.name);
             break;
         }
@@ -459,13 +483,62 @@ static void gen_node(ASTNode *node, FILE *out) {
 
             bool left_is_ptr = left_type && (left_type->kind == KIND_PTR || left_type->kind == KIND_ARRAY);
             bool right_is_ptr = right_type && (right_type->kind == KIND_PTR || right_type->kind == KIND_ARRAY);
+            bool is_float = (left_type && left_type->kind == KIND_FLOAT) || (right_type && right_type->kind == KIND_FLOAT);
 
             gen_node(node->binary.left, out);
-            fprintf(out, "    str x0, [sp, #-16]!\n");
-            gen_node(node->binary.right, out);
-            fprintf(out, "    ldr x1, [sp], #16\n");
+            if (is_float) {
+                fprintf(out, "    str s0, [sp, #-16]!\n");
+            } else {
+                fprintf(out, "    str x0, [sp, #-16]!\n");
+            }
 
-            if (left_is_ptr && !right_is_ptr && (node->binary.op == OP_ADD || node->binary.op == OP_SUB)) {
+            gen_node(node->binary.right, out);
+            if (is_float) {
+                fprintf(out, "    ldr s1, [sp], #16\n");
+            } else {
+                fprintf(out, "    ldr x1, [sp], #16\n");
+            }
+
+            if (is_float) {
+                switch (node->binary.op) {
+                    case OP_ADD:
+                        fprintf(out, "    fadd s0, s1, s0\n");
+                        break;
+                    case OP_SUB:
+                        fprintf(out, "    fsub s0, s1, s0\n");
+                        break;
+                    case OP_MUL:
+                        fprintf(out, "    fmul s0, s1, s0\n");
+                        break;
+                    case OP_DIV:
+                        fprintf(out, "    fdiv s0, s1, s0\n");
+                        break;
+                    case OP_EQ:
+                        fprintf(out, "    fcmp s1, s0\n");
+                        fprintf(out, "    cset w0, eq\n");
+                        break;
+                    case OP_NE:
+                        fprintf(out, "    fcmp s1, s0\n");
+                        fprintf(out, "    cset w0, ne\n");
+                        break;
+                    case OP_LT:
+                        fprintf(out, "    fcmp s1, s0\n");
+                        fprintf(out, "    cset w0, lt\n");
+                        break;
+                    case OP_LE:
+                        fprintf(out, "    fcmp s1, s0\n");
+                        fprintf(out, "    cset w0, le\n");
+                        break;
+                    case OP_GT:
+                        fprintf(out, "    fcmp s1, s0\n");
+                        fprintf(out, "    cset w0, gt\n");
+                        break;
+                    case OP_GE:
+                        fprintf(out, "    fcmp s1, s0\n");
+                        fprintf(out, "    cset w0, ge\n");
+                        break;
+                }
+            } else if (left_is_ptr && !right_is_ptr && (node->binary.op == OP_ADD || node->binary.op == OP_SUB)) {
                 Type *elem_type = (left_type->kind == KIND_PTR) ? left_type->ptr_to : left_type->array.elem_type;
                 int scale = type_size(elem_type);
                 fprintf(out, "    sxtw x0, w0\n");
@@ -533,9 +606,15 @@ static void gen_node(ASTNode *node, FILE *out) {
         case AST_EXPR_UNARY:
             gen_node(node->unary.expr, out);
             switch (node->unary.op) {
-                case OP_NEG:
-                    fprintf(out, "    neg w0, w0\n");
+                case OP_NEG: {
+                    Type *type = get_node_type(node->unary.expr);
+                    if (type && type->kind == KIND_FLOAT) {
+                        fprintf(out, "    fneg s0, s0\n");
+                    } else {
+                        fprintf(out, "    neg w0, w0\n");
+                    }
                     break;
+                }
                 case OP_NOT:
                     fprintf(out, "    mvn w0, w0\n");
                     break;
@@ -550,8 +629,13 @@ static void gen_node(ASTNode *node, FILE *out) {
             Type *type = get_node_type(node->assign.left);
             int size = type_size(type);
 
-            gen_node(node->assign.right, out); // RHS -> w0/x0
-            if (size <= 8) {
+            gen_node(node->assign.right, out); // RHS -> s0/w0/x0
+            if (type && type->kind == KIND_FLOAT) {
+                fprintf(out, "    str s0, [sp, #-16]!\n");
+                gen_addr(node->assign.left, out); // LHS address -> x0
+                fprintf(out, "    ldr s1, [sp], #16\n");
+                fprintf(out, "    str s1, [x0]\n");
+            } else if (size <= 8) {
                 fprintf(out, "    str %s, [sp, #-16]!\n", (size == 8) ? "x0" : "w0");
                 gen_addr(node->assign.left, out); // LHS address -> x0
                 fprintf(out, "    ldr %s, [sp], #16\n", (size == 8) ? "x1" : "w1");
@@ -575,7 +659,9 @@ static void gen_node(ASTNode *node, FILE *out) {
             Type *type = get_node_type(node);
             int size = type_size(type);
             gen_addr(node, out); // address -> x0
-            if (size == 4) {
+            if (type && type->kind == KIND_FLOAT) {
+                fprintf(out, "    ldr s0, [x0]\n");
+            } else if (size == 4) {
                 fprintf(out, "    ldr w0, [x0]\n");
             } else if (size == 8) {
                 fprintf(out, "    ldr x0, [x0]\n");
@@ -591,7 +677,9 @@ static void gen_node(ASTNode *node, FILE *out) {
             Type *type = get_node_type(node);
             int size = type_size(type);
             gen_node(node->deref.expr, out); // pointer value -> x0
-            if (size == 4) {
+            if (type && type->kind == KIND_FLOAT) {
+                fprintf(out, "    ldr s0, [x0]\n");
+            } else if (size == 4) {
                 fprintf(out, "    ldr w0, [x0]\n");
             } else if (size == 8) {
                 fprintf(out, "    ldr x0, [x0]\n");
@@ -602,6 +690,40 @@ static void gen_node(ASTNode *node, FILE *out) {
         case AST_EXPR_NUM:
             fprintf(out, "    mov w0, #%d\n", node->num.value);
             break;
+
+        case AST_EXPR_FLOAT_LIT: {
+            int lbl = label_counter++;
+            fprintf(out, "    .section .rodata\n");
+            fprintf(out, "    .p2align 2\n");
+            fprintf(out, ".L.float.%d:\n", lbl);
+            fprintf(out, "    .float %f\n", node->float_lit.value);
+            fprintf(out, "    .text\n");
+
+            fprintf(out, "    adrp x0, .L.float.%d\n", lbl);
+            fprintf(out, "    add x0, x0, :lo12:.L.float.%d\n", lbl);
+            fprintf(out, "    ldr s0, [x0]\n");
+            break;
+        }
+
+        case AST_EXPR_STRING_LIT: {
+            int lbl = label_counter++;
+            fprintf(out, "    .section .rodata\n");
+            fprintf(out, ".L.str.%d:\n", lbl);
+            fprintf(out, "    .asciz \"");
+            for (char *s = node->string_lit.value; *s; s++) {
+                if (*s == '\n') {
+                    fprintf(out, "\\n");
+                } else {
+                    fputc(*s, out);
+                }
+            }
+            fprintf(out, "\"\n");
+            fprintf(out, "    .text\n");
+
+            fprintf(out, "    adrp x0, .L.str.%d\n", lbl);
+            fprintf(out, "    add x0, x0, :lo12:.L.str.%d\n", lbl);
+            break;
+        }
     }
 }
 

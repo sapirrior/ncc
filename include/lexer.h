@@ -7,6 +7,7 @@ typedef enum {
     TOKEN_EOF = 0,
     TOKEN_INT,       // 'int' keyword
     TOKEN_BOOL,      // '_Bool' keyword
+    TOKEN_FLOAT,     // 'float' keyword
     TOKEN_STRUCT,    // 'struct' keyword
     TOKEN_RETURN,    // 'return' keyword
     TOKEN_IF,        // 'if' keyword
@@ -17,7 +18,9 @@ typedef enum {
     TOKEN_BREAK,     // 'break' keyword
     TOKEN_CONTINUE,  // 'continue' keyword
     TOKEN_IDENT,     // Identifier
-    TOKEN_NUM,       // Number literal
+    TOKEN_NUM,       // Integer literal
+    TOKEN_FLOAT_LIT, // Float literal
+    TOKEN_STRING,    // String literal
     TOKEN_LPAREN,    // '('
     TOKEN_RPAREN,    // ')'
     TOKEN_LBRACE,    // '{'
@@ -48,7 +51,7 @@ typedef enum {
 
 typedef struct Token {
     TokenType type;
-    char *value;     // Raw string value (for identifiers/literals)
+    char *value;     // Raw string value
     int line;
     int col;
     struct Token *next;
