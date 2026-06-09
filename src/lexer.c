@@ -42,7 +42,7 @@ Token *tokenize(const char *filename, const char *source) {
             continue;
         }
 
-        // Parentheses, Braces, Comma, Semicolon
+        // Parentheses, Braces, Brackets, Comma, Semicolon, Dot, Amp
         if (*p == '(') {
             cur->next = new_token(TOKEN_LPAREN, NULL, line, col);
             cur = cur->next;
@@ -67,6 +67,18 @@ Token *tokenize(const char *filename, const char *source) {
             p++; col++;
             continue;
         }
+        if (*p == '[') {
+            cur->next = new_token(TOKEN_LBRACK, NULL, line, col);
+            cur = cur->next;
+            p++; col++;
+            continue;
+        }
+        if (*p == ']') {
+            cur->next = new_token(TOKEN_RBRACK, NULL, line, col);
+            cur = cur->next;
+            p++; col++;
+            continue;
+        }
         if (*p == ';') {
             cur->next = new_token(TOKEN_SEMI, NULL, line, col);
             cur = cur->next;
@@ -79,8 +91,26 @@ Token *tokenize(const char *filename, const char *source) {
             p++; col++;
             continue;
         }
+        if (*p == '.') {
+            cur->next = new_token(TOKEN_DOT, NULL, line, col);
+            cur = cur->next;
+            p++; col++;
+            continue;
+        }
+        if (*p == '&') {
+            cur->next = new_token(TOKEN_AMP, NULL, line, col);
+            cur = cur->next;
+            p++; col++;
+            continue;
+        }
 
-        // Multi-character Operators
+        // Multi-character Operators (check '->' before '-')
+        if (p[0] == '-' && p[1] == '>') {
+            cur->next = new_token(TOKEN_ARROW, NULL, line, col);
+            cur = cur->next;
+            p += 2; col += 2;
+            continue;
+        }
         if (p[0] == '=' && p[1] == '=') {
             cur->next = new_token(TOKEN_EQ, NULL, line, col);
             cur = cur->next;
@@ -196,6 +226,8 @@ Token *tokenize(const char *filename, const char *source) {
                 type = TOKEN_INT;
             } else if (strcmp(val, "_Bool") == 0) {
                 type = TOKEN_BOOL;
+            } else if (strcmp(val, "struct") == 0) {
+                type = TOKEN_STRUCT;
             } else if (strcmp(val, "return") == 0) {
                 type = TOKEN_RETURN;
             } else if (strcmp(val, "if") == 0) {
@@ -234,6 +266,7 @@ void print_tokens(Token *tok) {
             case TOKEN_EOF: printf("EOF\n"); break;
             case TOKEN_INT: printf("KEYWORD: int\n"); break;
             case TOKEN_BOOL: printf("KEYWORD: _Bool\n"); break;
+            case TOKEN_STRUCT: printf("KEYWORD: struct\n"); break;
             case TOKEN_RETURN: printf("KEYWORD: return\n"); break;
             case TOKEN_IF: printf("KEYWORD: if\n"); break;
             case TOKEN_ELSE: printf("KEYWORD: else\n"); break;
@@ -248,8 +281,12 @@ void print_tokens(Token *tok) {
             case TOKEN_RPAREN: printf("RPAREN: )\n"); break;
             case TOKEN_LBRACE: printf("LBRACE: {\n"); break;
             case TOKEN_RBRACE: printf("RBRACE: }\n"); break;
+            case TOKEN_LBRACK: printf("LBRACK: [\n"); break;
+            case TOKEN_RBRACK: printf("RBRACK: ]\n"); break;
             case TOKEN_SEMI: printf("SEMI: ;\n"); break;
             case TOKEN_COMMA: printf("COMMA: ,\n"); break;
+            case TOKEN_DOT: printf("DOT: .\n"); break;
+            case TOKEN_AMP: printf("AMP: &\n"); break;
             case TOKEN_PLUS: printf("PLUS: +\n"); break;
             case TOKEN_MINUS: printf("MINUS: -\n"); break;
             case TOKEN_STAR: printf("STAR: *\n"); break;
@@ -263,6 +300,7 @@ void print_tokens(Token *tok) {
             case TOKEN_LE: printf("LE: <=\n"); break;
             case TOKEN_GT: printf("GT: >\n"); break;
             case TOKEN_GE: printf("GE: >=\n"); break;
+            case TOKEN_ARROW: printf("ARROW: ->\n"); break;
         }
         tok = tok->next;
     }

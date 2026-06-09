@@ -7,6 +7,7 @@ typedef enum {
     TOKEN_EOF = 0,
     TOKEN_INT,       // 'int' keyword
     TOKEN_BOOL,      // '_Bool' keyword
+    TOKEN_STRUCT,    // 'struct' keyword
     TOKEN_RETURN,    // 'return' keyword
     TOKEN_IF,        // 'if' keyword
     TOKEN_ELSE,      // 'else' keyword
@@ -21,8 +22,12 @@ typedef enum {
     TOKEN_RPAREN,    // ')'
     TOKEN_LBRACE,    // '{'
     TOKEN_RBRACE,    // '}'
+    TOKEN_LBRACK,    // '['
+    TOKEN_RBRACK,    // ']'
     TOKEN_SEMI,      // ';'
     TOKEN_COMMA,     // ','
+    TOKEN_DOT,       // '.'
+    TOKEN_AMP,       // '&'
 
     // Operators
     TOKEN_PLUS,      // '+'
@@ -38,6 +43,7 @@ typedef enum {
     TOKEN_LE,        // '<='
     TOKEN_GT,        // '>'
     TOKEN_GE,        // '>='
+    TOKEN_ARROW,     // '->'
 } TokenType;
 
 typedef struct Token {

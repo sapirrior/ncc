@@ -4,8 +4,46 @@
 #include "common.h"
 
 typedef enum {
+    KIND_INT,
+    KIND_BOOL,
+    KIND_ARRAY,
+    KIND_STRUCT,
+    KIND_PTR
+} TypeKind;
+
+typedef struct Type Type;
+
+typedef struct Field {
+    char *name;
+    Type *type;
+    int offset;
+} Field;
+
+struct Type {
+    TypeKind kind;
+    union {
+        // Array
+        struct {
+            Type *elem_type;
+            int size;
+        } array;
+
+        // Struct
+        struct {
+            char *name; // tag name
+            Field *fields;
+            int field_count;
+        } struct_def;
+
+        // Pointer
+        Type *ptr_to;
+    };
+};
+
+typedef enum {
     AST_PROGRAM,
     AST_FUNC_DECL,
+    AST_STMT_STRUCT_DEF,
     AST_STMT_RETURN,
     AST_STMT_EXPR,
     AST_STMT_DECL,
@@ -22,6 +60,10 @@ typedef enum {
     AST_EXPR_VAR,
     AST_EXPR_NUM,
     AST_EXPR_CALL,
+    AST_EXPR_MEMBER,
+    AST_EXPR_INDEX,
+    AST_EXPR_ADDR,
+    AST_EXPR_DEREF,
 } ASTNodeType;
 
 typedef enum {
@@ -32,11 +74,6 @@ typedef enum {
 typedef enum {
     OP_NEG, OP_NOT, OP_LNOT // negation (-), bitwise not (~), logical not (!)
 } UnaryOp;
-
-typedef enum {
-    TYPE_INT,
-    TYPE_BOOL
-} VarType;
 
 typedef struct ASTNode {
     ASTNodeType type;
@@ -51,11 +88,18 @@ typedef struct ASTNode {
         struct {
             char *name;
             char **params;
-            VarType *param_types;
+            Type **param_types;
             int param_count;
             struct ASTNode **stmts;
             int stmt_count;
         } func;
+
+        // Struct definition statement
+        struct {
+            char *name; // struct name
+            Field *fields;
+            int field_count;
+        } struct_def;
 
         // Return statement
         struct {
@@ -69,7 +113,7 @@ typedef struct ASTNode {
 
         // Variable declaration
         struct {
-            VarType var_type;
+            Type *var_type;
             char *name;
             struct ASTNode *init; // Initializer expression (optional)
         } decl_stmt;
@@ -123,9 +167,31 @@ typedef struct ASTNode {
 
         // Assignment expression
         struct {
-            char *name;
-            struct ASTNode *expr;
+            struct ASTNode *left; // LHS (can be var, index, member access)
+            struct ASTNode *right; // RHS
         } assign;
+
+        // Member access: expr.member
+        struct {
+            struct ASTNode *expr;
+            char *member_name;
+        } member;
+
+        // Array indexing: expr[expr]
+        struct {
+            struct ASTNode *expr;
+            struct ASTNode *index;
+        } index;
+
+        // Address-of: &expr
+        struct {
+            struct ASTNode *expr;
+        } addr;
+
+        // Dereference: *expr
+        struct {
+            struct ASTNode *expr;
+        } deref;
 
         // Variable reference
         struct {
@@ -139,12 +205,24 @@ typedef struct ASTNode {
     };
 } ASTNode;
 
+// Type helper prototypes
+Type *new_type_int(void);
+Type *new_type_bool(void);
+Type *new_type_array(Type *elem_type, int size);
+Type *new_type_struct(const char *name, Field *fields, int field_count);
+Type *new_type_ptr(Type *ptr_to);
+int type_size(Type *type);
+int type_align(Type *type);
+void free_type(Type *type);
+Type *copy_type(Type *type);
+
 // Helper function prototypes for AST creation and printing
 ASTNode *new_ast_program(ASTNode **decls, int decl_count);
-ASTNode *new_ast_func(const char *name, char **params, VarType *param_types, int param_count, ASTNode **stmts, int stmt_count);
+ASTNode *new_ast_func(const char *name, char **params, Type **param_types, int param_count, ASTNode **stmts, int stmt_count);
+ASTNode *new_ast_struct_def(const char *name, Field *fields, int field_count);
 ASTNode *new_ast_return(ASTNode *expr);
 ASTNode *new_ast_expr_stmt(ASTNode *expr);
-ASTNode *new_ast_decl(VarType var_type, const char *name, ASTNode *init);
+ASTNode *new_ast_decl(Type *var_type, const char *name, ASTNode *init);
 ASTNode *new_ast_if(ASTNode *cond, ASTNode *then_branch, ASTNode *else_branch);
 ASTNode *new_ast_while(ASTNode *cond, ASTNode *body);
 ASTNode *new_ast_do_while(ASTNode *cond, ASTNode *body);
@@ -155,7 +233,11 @@ ASTNode *new_ast_continue(void);
 ASTNode *new_ast_call(const char *name, ASTNode **args, int arg_count);
 ASTNode *new_ast_binary(BinaryOp op, ASTNode *left, ASTNode *right);
 ASTNode *new_ast_unary(UnaryOp op, ASTNode *expr);
-ASTNode *new_ast_assign(const char *name, ASTNode *expr);
+ASTNode *new_ast_assign(ASTNode *left, ASTNode *right);
+ASTNode *new_ast_member(ASTNode *expr, const char *member_name);
+ASTNode *new_ast_index(ASTNode *expr, ASTNode *index);
+ASTNode *new_ast_addr(ASTNode *expr);
+ASTNode *new_ast_deref(ASTNode *expr);
 ASTNode *new_ast_var(const char *name);
 ASTNode *new_ast_num(int value);
 
