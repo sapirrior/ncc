@@ -6,6 +6,7 @@
 typedef enum {
     TOKEN_EOF = 0,
     TOKEN_INT,       // 'int' keyword
+    TOKEN_BOOL,      // '_Bool' keyword
     TOKEN_RETURN,    // 'return' keyword
     TOKEN_IDENT,     // Identifier
     TOKEN_NUM,       // Number literal
@@ -14,6 +15,21 @@ typedef enum {
     TOKEN_LBRACE,    // '{'
     TOKEN_RBRACE,    // '}'
     TOKEN_SEMI,      // ';'
+
+    // Operators
+    TOKEN_PLUS,      // '+'
+    TOKEN_MINUS,     // '-'
+    TOKEN_STAR,      // '*'
+    TOKEN_SLASH,     // '/'
+    TOKEN_TILDE,     // '~'
+    TOKEN_BANG,      // '!'
+    TOKEN_ASSIGN,    // '='
+    TOKEN_EQ,        // '=='
+    TOKEN_NE,        // '!='
+    TOKEN_LT,        // '<'
+    TOKEN_LE,        // '<='
+    TOKEN_GT,        // '>'
+    TOKEN_GE,        // '>='
 } TokenType;
 
 typedef struct Token {
