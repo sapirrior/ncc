@@ -30,7 +30,7 @@ for test_file in "$TEST_DIR"/test*.nc; do
 
     # Run in memory JIT and check exit status
     set +e
-    "$SCC" "$test_file" > /dev/null 2>&1
+    "$SCC" -r "$test_file" > /dev/null 2>&1
     actual=$?
     set -e
 

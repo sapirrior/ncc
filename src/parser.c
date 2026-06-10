@@ -69,7 +69,7 @@ int type_size(Type *type) {
         case KIND_I64: return 8;
         case KIND_F32: return 4;
         case KIND_F64: return 8;
-        case KIND_BOOL: return 1;
+        case KIND_BOOL: return 4;
         case KIND_PTR: return 8;
         case KIND_ARRAY: return type_size(type->array.elem_type) * type->array.size;
         case KIND_STRUCT: {
@@ -97,7 +97,7 @@ int type_align(Type *type) {
         case KIND_I64: return 8;
         case KIND_F32: return 4;
         case KIND_F64: return 8;
-        case KIND_BOOL: return 1;
+        case KIND_BOOL: return 4;
         case KIND_PTR: return 8;
         case KIND_ARRAY: return type_align(type->array.elem_type);
         case KIND_STRUCT: {
@@ -783,6 +783,15 @@ static ASTNode *parse_primary(void) {
         return new_ast_nullptr();
     }
 
+    if (match(TOKEN_FREE)) {
+        consume(TOKEN_LPAREN, "Expected '(' after free");
+        ASTNode *expr = parse_expression(0);
+        consume(TOKEN_RPAREN, "Expected ')' after expression");
+        ASTNode **args = xmalloc(sizeof(ASTNode*));
+        args[0] = expr;
+        return new_ast_call("free", args, 1);
+    }
+
     if (match(TOKEN_ALLOC)) {
         consume(TOKEN_LPAREN, "Expected '(' after alloc");
         ASTNode *size = parse_expression(0);
@@ -798,6 +807,7 @@ static ASTNode *parse_primary(void) {
         consume(TOKEN_RPAREN, "Expected ')' after sizeof");
         return new_ast_num(type_size(t)); // Evaluate sizeof at compile time
     }
+
 
     if (tok->type == TOKEN_IDENT) {
         char *name = tok->value;

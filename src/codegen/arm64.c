@@ -6,6 +6,8 @@ typedef struct {
     char *name;
     int offset;
     Type *type;
+    bool is_mut;
+    bool is_locked;
 } Symbol;
 
 static Symbol locals[100];
@@ -30,7 +32,25 @@ static Symbol *find_local(const char *name) {
     return NULL;
 }
 
-static int add_local(const char *name, Type *type) {
+static int eval_const_expr(ASTNode *node) {
+    if (!node) return 0;
+    if (node->type == AST_EXPR_NUM) return node->num.value;
+    if (node->type == AST_EXPR_BINARY) {
+        int left = eval_const_expr(node->binary.left);
+        int right = eval_const_expr(node->binary.right);
+        if (left == -1 || right == -1) return -1;
+        switch (node->binary.op) {
+            case OP_ADD: return left + right;
+            case OP_SUB: return left - right;
+            case OP_MUL: return left * right;
+            case OP_DIV: return right == 0 ? 0 : left / right;
+            default: break;
+        }
+    }
+    return -1;
+}
+
+static int add_local(const char *name, Type *type, bool is_mut) {
     if (find_local(name)) {
         error("Redeclaration of variable: %s", name);
     }
@@ -43,16 +63,19 @@ static int add_local(const char *name, Type *type) {
     locals[local_count].name = xstrdup(name);
     locals[local_count].offset = current_stack_offset;
     locals[local_count].type = copy_type(type);
+    locals[local_count].is_mut = is_mut;
+    locals[local_count].is_locked = false;
     local_count++;
 
     return current_stack_offset;
 }
 
+
 static void register_locals(ASTNode *node) {
     if (!node) return;
     switch (node->type) {
         case AST_STMT_DECL:
-            add_local(node->decl_stmt.name, node->decl_stmt.var_type);
+            add_local(node->decl_stmt.name, node->decl_stmt.var_type, node->decl_stmt.is_mut);
             break;
         case AST_STMT_BLOCK:
             for (int i = 0; i < node->block.stmt_count; i++) {
@@ -177,6 +200,9 @@ static void gen_addr(ASTNode *node, Emitter *e) {
             if (!sym) {
                 error("Undefined variable: %s", node->var.name);
             }
+            if (sym->is_locked) {
+                error("Error: Attempted operation on a blocked nullptr address context.");
+            }
             emit_sub_imm(e, true, REG_X0, REG_X29, sym->offset);
             break;
         }
@@ -211,14 +237,38 @@ static void gen_addr(ASTNode *node, Emitter *e) {
         }
 
         case AST_EXPR_INDEX: {
+            Type *arr_type = get_node_type(node->index.expr);
+            if (arr_type->kind == KIND_ARRAY) {
+                int idx = eval_const_expr(node->index.index);
+                if (idx != -1) {
+                    if (idx < 0 || idx >= arr_type->array.size) {
+                        error("Error: Attempted operation on an out-of-bounds index.");
+                    }
+                }
+            }
+
             gen_addr(node->index.expr, e);
             emit_str_preindex(e, 8, REG_X0, REG_SP, -16);
 
             gen_node(node->index.index, e);
             emit_sxtw(e, REG_X0, REG_X0);
+
+            if (arr_type->kind == KIND_ARRAY) {
+                int panic_lbl = emitter_new_label(e);
+                int ok_label = emitter_new_label(e);
+                emit_cmp_imm(e, true, REG_X0, 0);
+                emit_b_cond_label(e, COND_LT, panic_lbl);
+                emit_cmp_imm(e, true, REG_X0, arr_type->array.size);
+                emit_b_cond_label(e, COND_GE, panic_lbl);
+                emit_b_label(e, ok_label);
+                emitter_define_label(e, panic_lbl);
+                emit_mov_imm(e, false, REG_X0, 139);
+                emit_bl(e, "exit");
+                emitter_define_label(e, ok_label);
+            }
+
             emit_ldr_postindex(e, 8, REG_X1, REG_SP, 16);
 
-            Type *arr_type = get_node_type(node->index.expr);
             if (arr_type->kind == KIND_PTR) {
                 emit_ldr_imm(e, 8, REG_X1, REG_X1, 0);
                 arr_type = arr_type->ptr_to;
@@ -259,7 +309,7 @@ static void gen_node(ASTNode *node, Emitter *e) {
             clear_locals();
 
             for (int i = 0; i < node->func.param_count; i++) {
-                add_local(node->func.params[i], node->func.param_types[i]);
+                add_local(node->func.params[i], node->func.param_types[i], true);
             }
 
             for (int i = 0; i < node->func.stmt_count; i++) {
@@ -328,6 +378,15 @@ static void gen_node(ASTNode *node, Emitter *e) {
         case AST_STMT_DECL: {
             Symbol *sym = find_local(node->decl_stmt.name);
             int size = type_size(sym->type);
+            if (sym->type->kind == KIND_ARRAY && node->decl_stmt.init && node->decl_stmt.init->type == AST_EXPR_ALLOC) {
+                int alloc_size = eval_const_expr(node->decl_stmt.init->alloc_expr.size_expr);
+                if (alloc_size != -1) {
+                    int declared_size = type_size(sym->type);
+                    if (alloc_size != declared_size) {
+                        error("Error: Array allocation size mismatch.");
+                    }
+                }
+            }
             if (node->decl_stmt.init) {
                 gen_node(node->decl_stmt.init, e); // Evaluates -> w0/x0/s0
                 emit_sub_imm(e, true, REG_X1, REG_X29, sym->offset);
@@ -668,6 +727,30 @@ static void gen_node(ASTNode *node, Emitter *e) {
         case AST_EXPR_ASSIGN: {
             Type *type = get_node_type(node->assign.left);
             int size = type_size(type);
+
+            ASTNode *base = node->assign.left;
+            while (base->type == AST_EXPR_MEMBER || base->type == AST_EXPR_INDEX) {
+                if (base->type == AST_EXPR_MEMBER) base = base->member.expr;
+                else base = base->index.expr;
+            }
+            if (base->type == AST_EXPR_VAR) {
+                Symbol *sym = find_local(base->var.name);
+                if (sym) {
+                    if (!sym->is_mut) {
+                        error("Error: Attempted operation on an immutable variable.");
+                    }
+                    if (sym->is_locked) {
+                        error("Error: Attempted operation on a blocked nullptr address context.");
+                    }
+                    if (node->assign.right->type == AST_EXPR_NULLPTR && node->assign.left->type == AST_EXPR_VAR) {
+                        // 1. Implicit Free Generation
+                        gen_node(node->assign.left, e);
+                        emit_bl(e, "free");
+                        // 2. Lock
+                        sym->is_locked = true;
+                    }
+                }
+            }
 
             gen_node(node->assign.right, e); // RHS -> s0/w0/x0
             if (type && type->kind == KIND_F32) {
