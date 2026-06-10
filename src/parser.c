@@ -1,5 +1,7 @@
 #include "parser.h"
 
+static Token *tok = NULL;
+
 // Type helpers
 Type *new_type_void(void) {
     Type *t = xmalloc(sizeof(Type));
@@ -203,17 +205,24 @@ static void add_struct_tag(const char *name, Type *type) {
 }
 
 // AST helpers
-ASTNode *new_ast_program(ASTNode **decls, int decl_count) {
+static ASTNode *new_ast_node(ASTNodeType type) {
     ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_PROGRAM;
+    node->type = type;
+    node->line = tok ? tok->line : 0;
+    node->col = tok ? tok->col : 0;
+    return node;
+}
+
+// AST helpers
+ASTNode *new_ast_program(ASTNode **decls, int decl_count) {
+    ASTNode *node = new_ast_node(AST_PROGRAM);
     node->program.decls = decls;
     node->program.decl_count = decl_count;
     return node;
 }
 
 ASTNode *new_ast_func(const char *name, char **params, Type **param_types, int param_count, ASTNode **stmts, int stmt_count, Type *return_type) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_FUNC_DECL;
+    ASTNode *node = new_ast_node(AST_FUNC_DECL);
     node->func.name = xstrdup(name);
     node->func.params = params;
     node->func.param_types = param_types;
@@ -225,8 +234,7 @@ ASTNode *new_ast_func(const char *name, char **params, Type **param_types, int p
 }
 
 ASTNode *new_ast_struct_def(const char *name, Field *fields, int field_count) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_STMT_STRUCT_DEF;
+    ASTNode *node = new_ast_node(AST_STMT_STRUCT_DEF);
     node->struct_def.name = xstrdup(name);
     node->struct_def.fields = fields;
     node->struct_def.field_count = field_count;
@@ -234,22 +242,19 @@ ASTNode *new_ast_struct_def(const char *name, Field *fields, int field_count) {
 }
 
 ASTNode *new_ast_return(ASTNode *expr) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_STMT_RETURN;
+    ASTNode *node = new_ast_node(AST_STMT_RETURN);
     node->ret_stmt.expr = expr;
     return node;
 }
 
 ASTNode *new_ast_expr_stmt(ASTNode *expr) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_STMT_EXPR;
+    ASTNode *node = new_ast_node(AST_STMT_EXPR);
     node->expr_stmt.expr = expr;
     return node;
 }
 
 ASTNode *new_ast_decl(Type *var_type, const char *name, ASTNode *init, bool is_mut) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_STMT_DECL;
+    ASTNode *node = new_ast_node(AST_STMT_DECL);
     node->decl_stmt.var_type = var_type;
     node->decl_stmt.name = xstrdup(name);
     node->decl_stmt.init = init;
@@ -258,8 +263,7 @@ ASTNode *new_ast_decl(Type *var_type, const char *name, ASTNode *init, bool is_m
 }
 
 ASTNode *new_ast_if(ASTNode *cond, ASTNode *then_branch, ASTNode *else_branch) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_STMT_IF;
+    ASTNode *node = new_ast_node(AST_STMT_IF);
     node->if_stmt.cond = cond;
     node->if_stmt.then_branch = then_branch;
     node->if_stmt.else_branch = else_branch;
@@ -267,24 +271,21 @@ ASTNode *new_ast_if(ASTNode *cond, ASTNode *then_branch, ASTNode *else_branch) {
 }
 
 ASTNode *new_ast_while(ASTNode *cond, ASTNode *body) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_STMT_WHILE;
+    ASTNode *node = new_ast_node(AST_STMT_WHILE);
     node->while_stmt.cond = cond;
     node->while_stmt.body = body;
     return node;
 }
 
 ASTNode *new_ast_do_while(ASTNode *cond, ASTNode *body) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_STMT_DO_WHILE;
+    ASTNode *node = new_ast_node(AST_STMT_DO_WHILE);
     node->while_stmt.cond = cond;
     node->while_stmt.body = body;
     return node;
 }
 
 ASTNode *new_ast_for(ASTNode *init, ASTNode *cond, ASTNode *post, ASTNode *body) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_STMT_FOR;
+    ASTNode *node = new_ast_node(AST_STMT_FOR);
     node->for_stmt.init = init;
     node->for_stmt.cond = cond;
     node->for_stmt.post = post;
@@ -293,42 +294,36 @@ ASTNode *new_ast_for(ASTNode *init, ASTNode *cond, ASTNode *post, ASTNode *body)
 }
 
 ASTNode *new_ast_block(ASTNode **stmts, int stmt_count) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_STMT_BLOCK;
+    ASTNode *node = new_ast_node(AST_STMT_BLOCK);
     node->block.stmts = stmts;
     node->block.stmt_count = stmt_count;
     return node;
 }
 
 ASTNode *new_ast_defer(ASTNode *stmt) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_STMT_DEFER;
+    ASTNode *node = new_ast_node(AST_STMT_DEFER);
     node->defer_stmt.stmt = stmt;
     return node;
 }
 
 ASTNode *new_ast_import(const char *path) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_STMT_IMPORT;
+    ASTNode *node = new_ast_node(AST_STMT_IMPORT);
     node->import_stmt.path = xstrdup(path);
     return node;
 }
 
 ASTNode *new_ast_break(void) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_STMT_BREAK;
+    ASTNode *node = new_ast_node(AST_STMT_BREAK);
     return node;
 }
 
 ASTNode *new_ast_continue(void) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_STMT_CONTINUE;
+    ASTNode *node = new_ast_node(AST_STMT_CONTINUE);
     return node;
 }
 
 ASTNode *new_ast_call(const char *name, ASTNode **args, int arg_count) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_CALL;
+    ASTNode *node = new_ast_node(AST_EXPR_CALL);
     node->call.name = xstrdup(name);
     node->call.args = args;
     node->call.arg_count = arg_count;
@@ -336,8 +331,7 @@ ASTNode *new_ast_call(const char *name, ASTNode **args, int arg_count) {
 }
 
 ASTNode *new_ast_binary(BinaryOp op, ASTNode *left, ASTNode *right) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_BINARY;
+    ASTNode *node = new_ast_node(AST_EXPR_BINARY);
     node->binary.op = op;
     node->binary.left = left;
     node->binary.right = right;
@@ -345,88 +339,76 @@ ASTNode *new_ast_binary(BinaryOp op, ASTNode *left, ASTNode *right) {
 }
 
 ASTNode *new_ast_unary(UnaryOp op, ASTNode *expr) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_UNARY;
+    ASTNode *node = new_ast_node(AST_EXPR_UNARY);
     node->unary.op = op;
     node->unary.expr = expr;
     return node;
 }
 
 ASTNode *new_ast_assign(ASTNode *left, ASTNode *right) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_ASSIGN;
+    ASTNode *node = new_ast_node(AST_EXPR_ASSIGN);
     node->assign.left = left;
     node->assign.right = right;
     return node;
 }
 
 ASTNode *new_ast_member(ASTNode *expr, const char *member_name) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_MEMBER;
+    ASTNode *node = new_ast_node(AST_EXPR_MEMBER);
     node->member.expr = expr;
     node->member.member_name = xstrdup(member_name);
     return node;
 }
 
 ASTNode *new_ast_index(ASTNode *expr, ASTNode *index) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_INDEX;
+    ASTNode *node = new_ast_node(AST_EXPR_INDEX);
     node->index.expr = expr;
     node->index.index = index;
     return node;
 }
 
 ASTNode *new_ast_addr(ASTNode *expr) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_ADDR;
+    ASTNode *node = new_ast_node(AST_EXPR_ADDR);
     node->addr.expr = expr;
     return node;
 }
 
 ASTNode *new_ast_deref(ASTNode *expr) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_DEREF;
+    ASTNode *node = new_ast_node(AST_EXPR_DEREF);
     node->deref.expr = expr;
     return node;
 }
 
 ASTNode *new_ast_alloc(ASTNode *size_expr) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_ALLOC;
+    ASTNode *node = new_ast_node(AST_EXPR_ALLOC);
     node->alloc_expr.size_expr = size_expr;
     return node;
 }
 
 ASTNode *new_ast_nullptr(void) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_NULLPTR;
+    ASTNode *node = new_ast_node(AST_EXPR_NULLPTR);
     return node;
 }
 
 ASTNode *new_ast_var(const char *name) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_VAR;
+    ASTNode *node = new_ast_node(AST_EXPR_VAR);
     node->var.name = xstrdup(name);
     return node;
 }
 
 ASTNode *new_ast_num(int value) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_NUM;
+    ASTNode *node = new_ast_node(AST_EXPR_NUM);
     node->num.value = value;
     return node;
 }
 
 ASTNode *new_ast_float_lit(double value) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_FLOAT_LIT;
+    ASTNode *node = new_ast_node(AST_EXPR_FLOAT_LIT);
     node->float_lit.value = value;
     return node;
 }
 
 ASTNode *new_ast_string_lit(const char *value) {
-    ASTNode *node = xmalloc(sizeof(ASTNode));
-    node->type = AST_EXPR_STRING_LIT;
+    ASTNode *node = new_ast_node(AST_EXPR_STRING_LIT);
     node->string_lit.value = xstrdup(value);
     return node;
 }
@@ -701,7 +683,6 @@ void print_ast(ASTNode *node, int indent) {
 }
 
 // Parsing logic
-static Token *tok;
 
 static void consume(TokenType type, const char *err_msg) {
     if (tok->type != type) {

@@ -198,10 +198,10 @@ static void gen_addr(ASTNode *node, Emitter *e) {
         case AST_EXPR_VAR: {
             Symbol *sym = find_local(node->var.name);
             if (!sym) {
-                error("Undefined variable: %s", node->var.name);
+                error_at(g_filename, node->line, node->col, "Undefined variable: %s", node->var.name);
             }
             if (sym->is_locked) {
-                error("Error: Attempted operation on a blocked nullptr address context.");
+                error_at(g_filename, node->line, node->col, "Attempted operation on a blocked nullptr address context.");
             }
             emit_sub_imm(e, true, REG_X0, REG_X29, sym->offset);
             break;
@@ -242,7 +242,7 @@ static void gen_addr(ASTNode *node, Emitter *e) {
                 int idx = eval_const_expr(node->index.index);
                 if (idx != -1) {
                     if (idx < 0 || idx >= arr_type->array.size) {
-                        error("Error: Attempted operation on an out-of-bounds index.");
+                        error_at(g_filename, node->line, node->col, "Attempted operation on an out-of-bounds index.");
                     }
                 }
             }
@@ -383,7 +383,7 @@ static void gen_node(ASTNode *node, Emitter *e) {
                 if (alloc_size != -1) {
                     int declared_size = type_size(sym->type);
                     if (alloc_size != declared_size) {
-                        error("Error: Array allocation size mismatch.");
+                        error_at(g_filename, node->line, node->col, "Array allocation size mismatch.");
                     }
                 }
             }
@@ -737,10 +737,10 @@ static void gen_node(ASTNode *node, Emitter *e) {
                 Symbol *sym = find_local(base->var.name);
                 if (sym) {
                     if (!sym->is_mut) {
-                        error("Error: Attempted operation on an immutable variable.");
+                        error_at(g_filename, node->line, node->col, "Attempted operation on an immutable variable.");
                     }
                     if (sym->is_locked) {
-                        error("Error: Attempted operation on a blocked nullptr address context.");
+                        error_at(g_filename, node->line, node->col, "Attempted operation on a blocked nullptr address context.");
                     }
                     if (node->assign.right->type == AST_EXPR_NULLPTR && node->assign.left->type == AST_EXPR_VAR) {
                         // 1. Implicit Free Generation

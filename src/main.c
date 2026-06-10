@@ -163,6 +163,7 @@ int main(int argc, char **argv) {
         error("No input file provided");
     }
 
+    g_filename = in_file;
     char *source = read_source_file(in_file);
     Token *tokens = tokenize(in_file, source);
     ASTNode *ast = parse(tokens);

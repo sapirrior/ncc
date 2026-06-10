@@ -7,6 +7,8 @@
 #include <string.h>
 #include <ctype.h>
 
+extern const char *g_filename;
+
 // Error reporting helpers
 void error(const char *fmt, ...);
 void error_at(const char *filename, int line, int col, const char *fmt, ...);

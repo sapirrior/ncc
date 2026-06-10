@@ -1,6 +1,9 @@
 #include "common.h"
 #include <stdarg.h>
 
+const char *g_filename = NULL;
+
+
 void error(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);

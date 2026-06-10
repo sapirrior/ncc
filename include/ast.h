@@ -87,6 +87,8 @@ typedef enum {
 
 typedef struct ASTNode {
     ASTNodeType type;
+    int line;
+    int col;
     union {
         // Program: list of top-level declarations
         struct {
