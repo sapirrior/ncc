@@ -537,6 +537,8 @@ Token *tokenize(const char *filename, const char *source) {
                 type = TOKEN_BOOL;
             } else if (strcmp(val, "float") == 0) {
                 type = TOKEN_FLOAT;
+            } else if (strcmp(val, "char") == 0) {
+                type = TOKEN_CHAR;
             } else if (strcmp(val, "struct") == 0) {
                 type = TOKEN_STRUCT;
             } else if (strcmp(val, "return") == 0) {
@@ -579,6 +581,7 @@ void print_tokens(Token *tok) {
             case TOKEN_INT: printf("KEYWORD: int\n"); break;
             case TOKEN_BOOL: printf("KEYWORD: _Bool\n"); break;
             case TOKEN_FLOAT: printf("KEYWORD: float\n"); break;
+            case TOKEN_CHAR: printf("KEYWORD: char\n"); break;
             case TOKEN_STRUCT: printf("KEYWORD: struct\n"); break;
             case TOKEN_RETURN: printf("KEYWORD: return\n"); break;
             case TOKEN_IF: printf("KEYWORD: if\n"); break;

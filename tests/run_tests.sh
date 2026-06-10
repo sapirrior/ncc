@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -e
 
-# Cleanup temporary test files on exit
-trap 'rm -f tests/*.s tests/*.out' EXIT
-
 # Build compiler
 echo "Building compiler..."
 make
@@ -20,7 +17,7 @@ NC='\033[0m' # No Color
 passed=0
 failed=0
 
-echo "Running integration tests..."
+echo "Running integration tests in-memory..."
 for test_file in "$TEST_DIR"/test*.c; do
     name=$(basename "$test_file" .c)
 
@@ -31,23 +28,9 @@ for test_file in "$TEST_DIR"/test*.c; do
         continue
     fi
 
-    # Compile C to assembly
-    if ! "$SCC" "$test_file" -o "$TEST_DIR/$name.s"; then
-        echo -e "${RED}FAIL: $name (compiler compilation error)${NC}"
-        failed=$((failed + 1))
-        continue
-    fi
-
-    # Assemble assembly to binary
-    if ! clang "$TEST_DIR/$name.s" -o "$TEST_DIR/$name.out"; then
-        echo -e "${RED}FAIL: $name (clang assembly error)${NC}"
-        failed=$((failed + 1))
-        continue
-    fi
-
-    # Run and check exit status
+    # Run in memory JIT and check exit status
     set +e
-    "$TEST_DIR/$name.out"
+    "$SCC" "$test_file" > /dev/null 2>&1
     actual=$?
     set -e
 
@@ -58,9 +41,6 @@ for test_file in "$TEST_DIR"/test*.c; do
         echo -e "${RED}FAIL: $name (expected $expected, got $actual)${NC}"
         failed=$((failed + 1))
     fi
-
-    # Cleanup temp files
-    rm -f "$TEST_DIR/$name.s" "$TEST_DIR/$name.out"
 done
 
 echo "----------------------------------------"

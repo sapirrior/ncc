@@ -817,6 +817,8 @@ static Type *parse_type_specifier(void) {
         t = new_type_bool();
     } else if (match(TOKEN_FLOAT)) {
         t = new_type_float();
+    } else if (match(TOKEN_CHAR)) {
+        t = new_type_int(); // Treat char as int for simplicity and robust 4-byte alignment
     } else if (match(TOKEN_STRUCT)) {
         if (tok->type != TOKEN_IDENT) {
             error_at("input", tok->line, tok->col, "Expected struct tag identifier");
@@ -898,7 +900,7 @@ static ASTNode *parse_statement(void) {
         consume(TOKEN_LPAREN, "Expected '(' after for");
 
         ASTNode *init = NULL;
-        if (tok->type == TOKEN_INT || tok->type == TOKEN_BOOL || tok->type == TOKEN_FLOAT || tok->type == TOKEN_STRUCT) {
+        if (tok->type == TOKEN_INT || tok->type == TOKEN_BOOL || tok->type == TOKEN_FLOAT || tok->type == TOKEN_CHAR || tok->type == TOKEN_STRUCT) {
             Type *base_type = parse_type_specifier();
             if (tok->type != TOKEN_IDENT) {
                 error_at("input", tok->line, tok->col, "Expected variable identifier");
@@ -994,7 +996,7 @@ static ASTNode *parse_statement(void) {
     }
 
     // Variable declaration? e.g. int x; struct Point p; float f;
-    if (tok->type == TOKEN_INT || tok->type == TOKEN_BOOL || tok->type == TOKEN_FLOAT || tok->type == TOKEN_STRUCT) {
+    if (tok->type == TOKEN_INT || tok->type == TOKEN_BOOL || tok->type == TOKEN_FLOAT || tok->type == TOKEN_CHAR || tok->type == TOKEN_STRUCT) {
         Type *base_type = parse_type_specifier();
         if (tok->type != TOKEN_IDENT) {
             error_at("input", tok->line, tok->col, "Expected variable name identifier");

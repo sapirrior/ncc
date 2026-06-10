@@ -8,6 +8,7 @@ typedef enum {
     TOKEN_INT,       // 'int' keyword
     TOKEN_BOOL,      // '_Bool' keyword
     TOKEN_FLOAT,     // 'float' keyword
+    TOKEN_CHAR,      // 'char' keyword
     TOKEN_STRUCT,    // 'struct' keyword
     TOKEN_RETURN,    // 'return' keyword
     TOKEN_IF,        // 'if' keyword

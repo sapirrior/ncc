@@ -1,19 +1,22 @@
 CC = clang
-CFLAGS = -std=c11 -Wall -Wextra -Iinclude -g
+CFLAGS = -std=c11 -Wall -Wextra -Iinclude -g -D_GNU_SOURCE
+LDFLAGS = -ldl -lm
 
 # Source files
 SRCS = src/main.c \
-       src/argparse.c \
-       src/compiler.c \
-       src/runner.c \
-       src/cache.c
+       src/common.c \
+       src/lexer.c \
+       src/parser.c \
+       src/codegen/codegen.c \
+       src/codegen/emitter.c \
+       src/codegen/arm64.c
 
 BIN = ncc
 
 all: $(BIN)
 
 $(BIN): $(SRCS)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 clean:
 	rm -f $(BIN)

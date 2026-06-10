@@ -144,6 +144,7 @@ void emitter_resolve_relocs(Emitter *e) {
 
         if ((int)r.cond == -1) {
             // ADR: 21-bit signed byte offset
+            printf("[DEBUG] ADR reloc: label=%d, diff=%d\n", r.label_id, diff);
             instr &= ~(3 << 29);
             instr &= ~(0x7ffff << 5);
             uint32_t immlo = diff & 3;
@@ -152,12 +153,15 @@ void emitter_resolve_relocs(Emitter *e) {
             instr |= (immhi << 5);
         } else if ((int)r.cond == -2) {
             // LDR float PC-relative: 19-bit signed offset (scaled by 4)
+            printf("[DEBUG] LDR float reloc: label=%d, diff=%d, diff_instr=%d\n", r.label_id, diff, diff_instr);
             instr &= ~(0x7ffff << 5);
             instr |= ((diff_instr & 0x7ffff) << 5);
         } else if (r.is_conditional) {
+            printf("[DEBUG] B.cond reloc: label=%d, diff=%d, diff_instr=%d\n", r.label_id, diff, diff_instr);
             instr &= ~(0x7ffff << 5);
             instr |= ((diff_instr & 0x7ffff) << 5);
         } else {
+            printf("[DEBUG] B reloc: label=%d, diff=%d, diff_instr=%d\n", r.label_id, diff, diff_instr);
             instr &= ~0x3ffffff;
             instr |= (diff_instr & 0x3ffffff);
         }
@@ -208,8 +212,12 @@ void emit_mov_reg(Emitter *e, bool is_64bit, Reg rd, Reg rn) {
                 is_64bit ? reg_names_64[rd] : reg_names_32[rd],
                 is_64bit ? reg_names_64[rn] : reg_names_32[rn]);
     } else {
-        uint32_t op = is_64bit ? 0xaa0003e0 : 0x2a0003e0;
-        emit_u32(e, op | (reg_enc(rn) << 16) | reg_enc(rd));
+        if (rn == REG_SP || rd == REG_SP) {
+            emit_u32(e, (is_64bit ? 0x91000000 : 0x11000000) | (reg_enc(rn) << 5) | reg_enc(rd));
+        } else {
+            uint32_t op = is_64bit ? 0xaa0003e0 : 0x2a0003e0;
+            emit_u32(e, op | (reg_enc(rn) << 16) | reg_enc(rd));
+        }
     }
 }
 
@@ -370,10 +378,15 @@ void emit_str_imm(Emitter *e, int size, Reg rt, Reg rn, int offset) {
                 size == 8 ? reg_names_64[rt] : reg_names_32[rt],
                 reg_names_64[rn], offset);
     } else {
-        if (size == 4) {
-            emit_u32(e, 0xb9000000 | ((offset / 4) << 10) | (reg_enc(rn) << 5) | reg_enc(rt));
+        if (offset >= 0) {
+            if (size == 4) {
+                emit_u32(e, 0xb9000000 | ((offset / 4) << 10) | (reg_enc(rn) << 5) | reg_enc(rt));
+            } else {
+                emit_u32(e, 0xf9000000 | ((offset / 8) << 10) | (reg_enc(rn) << 5) | reg_enc(rt));
+            }
         } else {
-            emit_u32(e, 0xf9000000 | ((offset / 8) << 10) | (reg_enc(rn) << 5) | reg_enc(rt));
+            // Unscaled signed immediate store (9-bit signed offset)
+            emit_u32(e, (size == 8 ? 0xf8000000 : 0xb8000000) | ((offset & 0x1ff) << 12) | (reg_enc(rn) << 5) | reg_enc(rt));
         }
     }
 }
@@ -384,10 +397,15 @@ void emit_ldr_imm(Emitter *e, int size, Reg rt, Reg rn, int offset) {
                 size == 8 ? reg_names_64[rt] : reg_names_32[rt],
                 reg_names_64[rn], offset);
     } else {
-        if (size == 4) {
-            emit_u32(e, 0xb9400000 | ((offset / 4) << 10) | (reg_enc(rn) << 5) | reg_enc(rt));
+        if (offset >= 0) {
+            if (size == 4) {
+                emit_u32(e, 0xb9400000 | ((offset / 4) << 10) | (reg_enc(rn) << 5) | reg_enc(rt));
+            } else {
+                emit_u32(e, 0xf9400000 | ((offset / 8) << 10) | (reg_enc(rn) << 5) | reg_enc(rt));
+            }
         } else {
-            emit_u32(e, 0xf9400000 | ((offset / 8) << 10) | (reg_enc(rn) << 5) | reg_enc(rt));
+            // Unscaled signed immediate load (9-bit signed offset)
+            emit_u32(e, (size == 8 ? 0xf8400000 : 0xb8400000) | ((offset & 0x1ff) << 12) | (reg_enc(rn) << 5) | reg_enc(rt));
         }
     }
 }
@@ -419,7 +437,12 @@ void emit_fstr_imm(Emitter *e, FloatReg rt, Reg rn, int offset) {
         fprintf(e->out_file, "    str %s, [%s, #%d]\n",
                 float_reg_names[rt], reg_names_64[rn], offset);
     } else {
-        emit_u32(e, 0xbd000000 | ((offset / 4) << 10) | (reg_enc(rn) << 5) | float_reg_enc(rt));
+        if (offset >= 0) {
+            emit_u32(e, 0xbd000000 | ((offset / 4) << 10) | (reg_enc(rn) << 5) | float_reg_enc(rt));
+        } else {
+            // Unscaled signed immediate float store (9-bit signed offset)
+            emit_u32(e, 0xbc000000 | ((offset & 0x1ff) << 12) | (reg_enc(rn) << 5) | float_reg_enc(rt));
+        }
     }
 }
 
@@ -428,7 +451,12 @@ void emit_fldr_imm(Emitter *e, FloatReg rt, Reg rn, int offset) {
         fprintf(e->out_file, "    ldr %s, [%s, #%d]\n",
                 float_reg_names[rt], reg_names_64[rn], offset);
     } else {
-        emit_u32(e, 0xbd400000 | ((offset / 4) << 10) | (reg_enc(rn) << 5) | float_reg_enc(rt));
+        if (offset >= 0) {
+            emit_u32(e, 0xbd400000 | ((offset / 4) << 10) | (reg_enc(rn) << 5) | float_reg_enc(rt));
+        } else {
+            // Unscaled signed immediate float load (9-bit signed offset)
+            emit_u32(e, 0xbc400000 | ((offset & 0x1ff) << 12) | (reg_enc(rn) << 5) | float_reg_enc(rt));
+        }
     }
 }
 
@@ -624,14 +652,40 @@ void emit_string_data(Emitter *e, const char *str) {
         fprintf(e->out_file, "\"\n");
         fprintf(e->out_file, "    .p2align 2\n");
     } else {
-        int len = strlen(str) + 1;
-        for (int i = 0; i < len; i++) {
+        for (const char *s = str; *s; ) {
+            char c = *s++;
+            if (c == '\\' && *s) {
+                char next = *s++;
+                switch (next) {
+                    case 'n': c = '\n'; break;
+                    case 't': c = '\t'; break;
+                    case 'r': c = '\r'; break;
+                    case '\\': c = '\\'; break;
+                    case '"': c = '"'; break;
+                    default:
+                        if (e->size >= e->capacity) {
+                            e->capacity = e->capacity == 0 ? 4096 : e->capacity * 2;
+                            e->buffer = realloc(e->buffer, e->capacity);
+                        }
+                        e->buffer[e->size++] = '\\';
+                        c = next;
+                        break;
+                }
+            }
             if (e->size >= e->capacity) {
                 e->capacity = e->capacity == 0 ? 4096 : e->capacity * 2;
                 e->buffer = realloc(e->buffer, e->capacity);
             }
-            e->buffer[e->size++] = str[i];
+            e->buffer[e->size++] = c;
         }
+        // Null terminator
+        if (e->size >= e->capacity) {
+            e->capacity = e->capacity == 0 ? 4096 : e->capacity * 2;
+            e->buffer = realloc(e->buffer, e->capacity);
+        }
+        e->buffer[e->size++] = 0;
+
+        // Align to 4 bytes
         while (e->size % 4 != 0) {
             if (e->size >= e->capacity) {
                 e->capacity = e->capacity == 0 ? 4096 : e->capacity * 2;
