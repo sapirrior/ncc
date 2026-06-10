@@ -10,7 +10,8 @@ SRCS = src/main.c \
        src/codegen/codegen.c \
        src/codegen/emitter.c \
        src/codegen/arm64.c \
-       src/libs/os.c
+       src/libs/os.c \
+       src/libs/console.c
 
 BIN = ncc
 

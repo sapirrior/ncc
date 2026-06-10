@@ -541,7 +541,7 @@ static void gen_node(ASTNode *node, Emitter *e) {
         }
 
         case AST_EXPR_CALL: {
-            bool is_printf = (strcmp(node->call.name, "printf") == 0);
+            bool is_printf = (strcmp(node->call.name, "printf") == 0 || strcmp(node->call.name, "_NC7console6printf") == 0);
 
             // Evaluate arguments and push them to stack
             for (int i = 0; i < node->call.arg_count; i++) {
@@ -554,21 +554,36 @@ static void gen_node(ASTNode *node, Emitter *e) {
                 }
             }
 
-            int int_arg_idx = 0;
-            int float_arg_idx = 0;
+            int total_int_args = 0;
+            int total_float_args = 0;
+            for (int i = 0; i < node->call.arg_count; i++) {
+                Type *arg_type = get_node_type(node->call.args[i]);
+                if (arg_type && arg_type->kind == KIND_F32) {
+                    total_float_args++;
+                } else {
+                    total_int_args++;
+                }
+            }
+
+            int int_pop_idx = 0;
+            int float_pop_idx = 0;
 
             // Pop arguments in reverse order and assign to calling convention registers
             for (int i = node->call.arg_count - 1; i >= 0; i--) {
                 Type *arg_type = get_node_type(node->call.args[i]);
                 if (arg_type && arg_type->kind == KIND_F32) {
                     emit_fldr_postindex(e, REG_S16, REG_SP, 16);
+                    int dest_reg = total_float_args - 1 - float_pop_idx;
                     if (is_printf) {
-                        emit_fcvt_d_s(e, float_arg_idx++, REG_S16);
+                        emit_fcvt_d_s(e, dest_reg, REG_S16);
                     } else {
-                        emit_fmov(e, (FloatReg)float_arg_idx++, REG_S16);
+                        emit_fmov(e, (FloatReg)dest_reg, REG_S16);
                     }
+                    float_pop_idx++;
                 } else {
-                    emit_ldr_postindex(e, 8, (Reg)int_arg_idx++, REG_SP, 16);
+                    int dest_reg = total_int_args - 1 - int_pop_idx;
+                    emit_ldr_postindex(e, 8, (Reg)dest_reg, REG_SP, 16);
+                    int_pop_idx++;
                 }
             }
 
