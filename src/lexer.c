@@ -78,6 +78,34 @@ static char *read_file_or_null(const char *path) {
     return buf;
 }
 
+typedef struct {
+    char *name;
+    TokenType type;
+} Keyword;
+
+static Keyword keywords[] = {
+    {"i32", TOKEN_I32}, {"i64", TOKEN_I64}, {"f32", TOKEN_F32}, {"f64", TOKEN_F64},
+    {"bool", TOKEN_BOOL_TYPE}, {"ptr", TOKEN_PTR_TYPE}, {"void", TOKEN_VOID},
+    {"let", TOKEN_LET}, {"mut", TOKEN_MUT}, {"const", TOKEN_CONST}, {"fn", TOKEN_FN},
+    {"struct", TOKEN_STRUCT}, {"enum", TOKEN_ENUM}, {"union", TOKEN_UNION},
+    {"if", TOKEN_IF}, {"else", TOKEN_ELSE}, {"while", TOKEN_WHILE}, {"for", TOKEN_FOR},
+    {"in", TOKEN_IN}, {"return", TOKEN_RETURN}, {"break", TOKEN_BREAK}, {"continue", TOKEN_CONTINUE},
+    {"switch", TOKEN_SWITCH}, {"case", TOKEN_CASE},
+    {"alloc", TOKEN_ALLOC}, {"free", TOKEN_FREE}, {"defer", TOKEN_DEFER}, {"sizeof", TOKEN_SIZEOF},
+    {"import", TOKEN_IMPORT}, {"pub", TOKEN_PUB}, {"asm", TOKEN_ASM}, {"extern", TOKEN_EXTERN},
+    {"null", TOKEN_NULL}, {"nullptr", TOKEN_NULLPTR},
+};
+
+static TokenType find_keyword(const char *name) {
+    int count = sizeof(keywords) / sizeof(Keyword);
+    for (int i = 0; i < count; i++) {
+        if (strcmp(keywords[i].name, name) == 0) {
+            return keywords[i].type;
+        }
+    }
+    return TOKEN_IDENT;
+}
+
 Token *tokenize(const char *filename, const char *source) {
     Token head = {0};
     Token *cur = &head;
@@ -106,7 +134,7 @@ Token *tokenize(const char *filename, const char *source) {
             continue;
         }
 
-        // Skip C99 single-line comments
+        // Skip comments (both // and /* */ could be supported, keeping // for now)
         if (p[0] == '/' && p[1] == '/') {
             p += 2;
             col += 2;
@@ -117,7 +145,7 @@ Token *tokenize(const char *filename, const char *source) {
             continue;
         }
 
-        // Handle preprocessor directive
+        // Handle preprocessor directive (keeping for hybrid C/NeoC support during transition)
         if (bol && *p == '#') {
             p++; col++; // Consume '#'
             while (*p && (*p == ' ' || *p == '\t')) {
@@ -230,13 +258,6 @@ Token *tokenize(const char *filename, const char *source) {
                         } else {
                             error_at(filename, line, col, "Expected closing quote in #include");
                         }
-                    } else if (*p == '<') {
-                        while (*p && *p != '>' && *p != '\n') {
-                            p++; col++;
-                        }
-                        if (*p == '>') {
-                            p++; col++;
-                        }
                     }
                 } else if (strcmp(dir, "define") == 0) {
                     while (*p && (*p == ' ' || *p == '\t')) {
@@ -325,7 +346,7 @@ Token *tokenize(const char *filename, const char *source) {
             continue;
         }
 
-        // Parentheses, Braces, Brackets, Comma, Semicolon, Dot, Amp
+        // Parentheses, Braces, Brackets, Comma, Semicolon, Dot, Amp, Colon
         if (*p == '(') {
             cur->next = new_token(TOKEN_LPAREN, NULL, line, col);
             cur = cur->next;
@@ -380,6 +401,12 @@ Token *tokenize(const char *filename, const char *source) {
             p++; col++;
             continue;
         }
+        if (*p == ':') {
+            cur->next = new_token(TOKEN_COLON, NULL, line, col);
+            cur = cur->next;
+            p++; col++;
+            continue;
+        }
         if (*p == '&') {
             cur->next = new_token(TOKEN_AMP, NULL, line, col);
             cur = cur->next;
@@ -387,7 +414,7 @@ Token *tokenize(const char *filename, const char *source) {
             continue;
         }
 
-        // Multi-character Operators (check '->' before '-')
+        // Multi-character Operators
         if (p[0] == '-' && p[1] == '>') {
             cur->next = new_token(TOKEN_ARROW, NULL, line, col);
             cur = cur->next;
@@ -530,35 +557,7 @@ Token *tokenize(const char *filename, const char *source) {
                 continue;
             }
 
-            TokenType type = TOKEN_IDENT;
-            if (strcmp(val, "int") == 0) {
-                type = TOKEN_INT;
-            } else if (strcmp(val, "_Bool") == 0) {
-                type = TOKEN_BOOL;
-            } else if (strcmp(val, "float") == 0) {
-                type = TOKEN_FLOAT;
-            } else if (strcmp(val, "char") == 0) {
-                type = TOKEN_CHAR;
-            } else if (strcmp(val, "struct") == 0) {
-                type = TOKEN_STRUCT;
-            } else if (strcmp(val, "return") == 0) {
-                type = TOKEN_RETURN;
-            } else if (strcmp(val, "if") == 0) {
-                type = TOKEN_IF;
-            } else if (strcmp(val, "else") == 0) {
-                type = TOKEN_ELSE;
-            } else if (strcmp(val, "while") == 0) {
-                type = TOKEN_WHILE;
-            } else if (strcmp(val, "do") == 0) {
-                type = TOKEN_DO;
-            } else if (strcmp(val, "for") == 0) {
-                type = TOKEN_FOR;
-            } else if (strcmp(val, "break") == 0) {
-                type = TOKEN_BREAK;
-            } else if (strcmp(val, "continue") == 0) {
-                type = TOKEN_CONTINUE;
-            }
-
+            TokenType type = find_keyword(val);
             cur->next = new_token(type, type == TOKEN_IDENT ? val : NULL, line, start_col);
             free(val);
             cur = cur->next;
@@ -578,19 +577,40 @@ void print_tokens(Token *tok) {
         printf("[%d:%d] ", tok->line, tok->col);
         switch (tok->type) {
             case TOKEN_EOF: printf("EOF\n"); break;
-            case TOKEN_INT: printf("KEYWORD: int\n"); break;
-            case TOKEN_BOOL: printf("KEYWORD: _Bool\n"); break;
-            case TOKEN_FLOAT: printf("KEYWORD: float\n"); break;
-            case TOKEN_CHAR: printf("KEYWORD: char\n"); break;
+            case TOKEN_I32: printf("KEYWORD: i32\n"); break;
+            case TOKEN_I64: printf("KEYWORD: i64\n"); break;
+            case TOKEN_F32: printf("KEYWORD: f32\n"); break;
+            case TOKEN_F64: printf("KEYWORD: f64\n"); break;
+            case TOKEN_BOOL_TYPE: printf("KEYWORD: bool\n"); break;
+            case TOKEN_PTR_TYPE: printf("KEYWORD: ptr\n"); break;
+            case TOKEN_VOID: printf("KEYWORD: void\n"); break;
+            case TOKEN_LET: printf("KEYWORD: let\n"); break;
+            case TOKEN_MUT: printf("KEYWORD: mut\n"); break;
+            case TOKEN_CONST: printf("KEYWORD: const\n"); break;
+            case TOKEN_FN: printf("KEYWORD: fn\n"); break;
             case TOKEN_STRUCT: printf("KEYWORD: struct\n"); break;
-            case TOKEN_RETURN: printf("KEYWORD: return\n"); break;
+            case TOKEN_ENUM: printf("KEYWORD: enum\n"); break;
+            case TOKEN_UNION: printf("KEYWORD: union\n"); break;
             case TOKEN_IF: printf("KEYWORD: if\n"); break;
             case TOKEN_ELSE: printf("KEYWORD: else\n"); break;
             case TOKEN_WHILE: printf("KEYWORD: while\n"); break;
-            case TOKEN_DO: printf("KEYWORD: do\n"); break;
             case TOKEN_FOR: printf("KEYWORD: for\n"); break;
+            case TOKEN_IN: printf("KEYWORD: in\n"); break;
+            case TOKEN_RETURN: printf("KEYWORD: return\n"); break;
             case TOKEN_BREAK: printf("KEYWORD: break\n"); break;
             case TOKEN_CONTINUE: printf("KEYWORD: continue\n"); break;
+            case TOKEN_SWITCH: printf("KEYWORD: switch\n"); break;
+            case TOKEN_CASE: printf("KEYWORD: case\n"); break;
+            case TOKEN_ALLOC: printf("KEYWORD: alloc\n"); break;
+            case TOKEN_FREE: printf("KEYWORD: free\n"); break;
+            case TOKEN_DEFER: printf("KEYWORD: defer\n"); break;
+            case TOKEN_SIZEOF: printf("KEYWORD: sizeof\n"); break;
+            case TOKEN_IMPORT: printf("KEYWORD: import\n"); break;
+            case TOKEN_PUB: printf("KEYWORD: pub\n"); break;
+            case TOKEN_ASM: printf("KEYWORD: asm\n"); break;
+            case TOKEN_EXTERN: printf("KEYWORD: extern\n"); break;
+            case TOKEN_NULL: printf("KEYWORD: null\n"); break;
+            case TOKEN_NULLPTR: printf("KEYWORD: nullptr\n"); break;
             case TOKEN_IDENT: printf("IDENTIFIER: %s\n", tok->value); break;
             case TOKEN_NUM: printf("NUMBER: %s\n", tok->value); break;
             case TOKEN_FLOAT_LIT: printf("FLOAT_LITERAL: %s\n", tok->value); break;
@@ -604,6 +624,7 @@ void print_tokens(Token *tok) {
             case TOKEN_SEMI: printf("SEMI: ;\n"); break;
             case TOKEN_COMMA: printf("COMMA: ,\n"); break;
             case TOKEN_DOT: printf("DOT: .\n"); break;
+            case TOKEN_COLON: printf("COLON: :\n"); break;
             case TOKEN_AMP: printf("AMP: &\n"); break;
             case TOKEN_PLUS: printf("PLUS: +\n"); break;
             case TOKEN_MINUS: printf("MINUS: -\n"); break;

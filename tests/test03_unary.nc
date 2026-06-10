@@ -1,4 +1,5 @@
 // Expected: 3
-int main() {
+fn main() -> i32 {
     return !0 + !5 + ~(-3);
 }
+

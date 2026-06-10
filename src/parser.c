@@ -1,21 +1,39 @@
 #include "parser.h"
 
 // Type helpers
-Type *new_type_int(void) {
+Type *new_type_void(void) {
     Type *t = xmalloc(sizeof(Type));
-    t->kind = KIND_INT;
+    t->kind = KIND_VOID;
+    return t;
+}
+
+Type *new_type_i32(void) {
+    Type *t = xmalloc(sizeof(Type));
+    t->kind = KIND_I32;
+    return t;
+}
+
+Type *new_type_i64(void) {
+    Type *t = xmalloc(sizeof(Type));
+    t->kind = KIND_I64;
+    return t;
+}
+
+Type *new_type_f32(void) {
+    Type *t = xmalloc(sizeof(Type));
+    t->kind = KIND_F32;
+    return t;
+}
+
+Type *new_type_f64(void) {
+    Type *t = xmalloc(sizeof(Type));
+    t->kind = KIND_F64;
     return t;
 }
 
 Type *new_type_bool(void) {
     Type *t = xmalloc(sizeof(Type));
     t->kind = KIND_BOOL;
-    return t;
-}
-
-Type *new_type_float(void) {
-    Type *t = xmalloc(sizeof(Type));
-    t->kind = KIND_FLOAT;
     return t;
 }
 
@@ -46,9 +64,12 @@ Type *new_type_ptr(Type *ptr_to) {
 int type_size(Type *type) {
     if (!type) return 0;
     switch (type->kind) {
-        case KIND_INT: return 4;
-        case KIND_BOOL: return 4;
-        case KIND_FLOAT: return 4;
+        case KIND_VOID: return 0;
+        case KIND_I32: return 4;
+        case KIND_I64: return 8;
+        case KIND_F32: return 4;
+        case KIND_F64: return 8;
+        case KIND_BOOL: return 1;
         case KIND_PTR: return 8;
         case KIND_ARRAY: return type_size(type->array.elem_type) * type->array.size;
         case KIND_STRUCT: {
@@ -71,9 +92,12 @@ int type_size(Type *type) {
 int type_align(Type *type) {
     if (!type) return 1;
     switch (type->kind) {
-        case KIND_INT: return 4;
-        case KIND_BOOL: return 4;
-        case KIND_FLOAT: return 4;
+        case KIND_VOID: return 1;
+        case KIND_I32: return 4;
+        case KIND_I64: return 8;
+        case KIND_F32: return 4;
+        case KIND_F64: return 8;
+        case KIND_BOOL: return 1;
         case KIND_PTR: return 8;
         case KIND_ARRAY: return type_align(type->array.elem_type);
         case KIND_STRUCT: {
@@ -93,9 +117,12 @@ int type_align(Type *type) {
 void free_type(Type *type) {
     if (!type) return;
     switch (type->kind) {
-        case KIND_INT:
+        case KIND_VOID:
+        case KIND_I32:
+        case KIND_I64:
+        case KIND_F32:
+        case KIND_F64:
         case KIND_BOOL:
-        case KIND_FLOAT:
             break;
         case KIND_ARRAY:
             free_type(type->array.elem_type);
@@ -120,9 +147,12 @@ Type *copy_type(Type *type) {
     Type *t = xmalloc(sizeof(Type));
     t->kind = type->kind;
     switch (type->kind) {
-        case KIND_INT:
+        case KIND_VOID:
+        case KIND_I32:
+        case KIND_I64:
+        case KIND_F32:
+        case KIND_F64:
         case KIND_BOOL:
-        case KIND_FLOAT:
             break;
         case KIND_ARRAY:
             t->array.elem_type = copy_type(type->array.elem_type);
@@ -181,7 +211,7 @@ ASTNode *new_ast_program(ASTNode **decls, int decl_count) {
     return node;
 }
 
-ASTNode *new_ast_func(const char *name, char **params, Type **param_types, int param_count, ASTNode **stmts, int stmt_count) {
+ASTNode *new_ast_func(const char *name, char **params, Type **param_types, int param_count, ASTNode **stmts, int stmt_count, Type *return_type) {
     ASTNode *node = xmalloc(sizeof(ASTNode));
     node->type = AST_FUNC_DECL;
     node->func.name = xstrdup(name);
@@ -190,6 +220,7 @@ ASTNode *new_ast_func(const char *name, char **params, Type **param_types, int p
     node->func.param_count = param_count;
     node->func.stmts = stmts;
     node->func.stmt_count = stmt_count;
+    node->func.return_type = return_type;
     return node;
 }
 
@@ -216,12 +247,13 @@ ASTNode *new_ast_expr_stmt(ASTNode *expr) {
     return node;
 }
 
-ASTNode *new_ast_decl(Type *var_type, const char *name, ASTNode *init) {
+ASTNode *new_ast_decl(Type *var_type, const char *name, ASTNode *init, bool is_mut) {
     ASTNode *node = xmalloc(sizeof(ASTNode));
     node->type = AST_STMT_DECL;
     node->decl_stmt.var_type = var_type;
     node->decl_stmt.name = xstrdup(name);
     node->decl_stmt.init = init;
+    node->decl_stmt.is_mut = is_mut;
     return node;
 }
 
@@ -265,6 +297,20 @@ ASTNode *new_ast_block(ASTNode **stmts, int stmt_count) {
     node->type = AST_STMT_BLOCK;
     node->block.stmts = stmts;
     node->block.stmt_count = stmt_count;
+    return node;
+}
+
+ASTNode *new_ast_defer(ASTNode *stmt) {
+    ASTNode *node = xmalloc(sizeof(ASTNode));
+    node->type = AST_STMT_DEFER;
+    node->defer_stmt.stmt = stmt;
+    return node;
+}
+
+ASTNode *new_ast_import(const char *path) {
+    ASTNode *node = xmalloc(sizeof(ASTNode));
+    node->type = AST_STMT_IMPORT;
+    node->import_stmt.path = xstrdup(path);
     return node;
 }
 
@@ -344,6 +390,19 @@ ASTNode *new_ast_deref(ASTNode *expr) {
     return node;
 }
 
+ASTNode *new_ast_alloc(ASTNode *size_expr) {
+    ASTNode *node = xmalloc(sizeof(ASTNode));
+    node->type = AST_EXPR_ALLOC;
+    node->alloc_expr.size_expr = size_expr;
+    return node;
+}
+
+ASTNode *new_ast_nullptr(void) {
+    ASTNode *node = xmalloc(sizeof(ASTNode));
+    node->type = AST_EXPR_NULLPTR;
+    return node;
+}
+
 ASTNode *new_ast_var(const char *name) {
     ASTNode *node = xmalloc(sizeof(ASTNode));
     node->type = AST_EXPR_VAR;
@@ -393,6 +452,7 @@ void free_ast(ASTNode *node) {
                 free_ast(node->func.stmts[i]);
             }
             free(node->func.stmts);
+            free_type(node->func.return_type);
             break;
         case AST_STMT_STRUCT_DEF:
             free(node->struct_def.name);
@@ -439,6 +499,12 @@ void free_ast(ASTNode *node) {
             }
             free(node->block.stmts);
             break;
+        case AST_STMT_DEFER:
+            free_ast(node->defer_stmt.stmt);
+            break;
+        case AST_STMT_IMPORT:
+            free(node->import_stmt.path);
+            break;
         case AST_STMT_BREAK:
         case AST_STMT_CONTINUE:
             break;
@@ -474,6 +540,11 @@ void free_ast(ASTNode *node) {
         case AST_EXPR_DEREF:
             free_ast(node->deref.expr);
             break;
+        case AST_EXPR_ALLOC:
+            free_ast(node->alloc_expr.size_expr);
+            break;
+        case AST_EXPR_NULLPTR:
+            break;
         case AST_EXPR_VAR:
             free(node->var.name);
             break;
@@ -499,7 +570,9 @@ void print_ast(ASTNode *node, int indent) {
             }
             break;
         case AST_FUNC_DECL:
-            printf("FuncDecl: %s (%d params)\n", node->func.name, node->func.param_count);
+            printf("FuncDecl: %s (%d params) -> (kind %d)\n",
+                node->func.name, node->func.param_count,
+                node->func.return_type ? node->func.return_type->kind : -1);
             for (int i = 0; i < node->func.stmt_count; i++) {
                 print_ast(node->func.stmts[i], indent + 1);
             }
@@ -516,7 +589,8 @@ void print_ast(ASTNode *node, int indent) {
             print_ast(node->expr_stmt.expr, indent + 1);
             break;
         case AST_STMT_DECL:
-            printf("DeclStmt: (type kind %d) %s\n",
+            printf("DeclStmt: [%s] (type kind %d) %s\n",
+                node->decl_stmt.is_mut ? "mut" : "let",
                 node->decl_stmt.var_type->kind,
                 node->decl_stmt.name);
             if (node->decl_stmt.init) {
@@ -553,6 +627,13 @@ void print_ast(ASTNode *node, int indent) {
             for (int i = 0; i < node->block.stmt_count; i++) {
                 print_ast(node->block.stmts[i], indent + 1);
             }
+            break;
+        case AST_STMT_DEFER:
+            printf("DeferStmt:\n");
+            print_ast(node->defer_stmt.stmt, indent + 1);
+            break;
+        case AST_STMT_IMPORT:
+            printf("ImportStmt: %s\n", node->import_stmt.path);
             break;
         case AST_STMT_BREAK:
             printf("BreakStmt\n");
@@ -596,6 +677,13 @@ void print_ast(ASTNode *node, int indent) {
         case AST_EXPR_DEREF:
             printf("DerefExpr:\n");
             print_ast(node->deref.expr, indent + 1);
+            break;
+        case AST_EXPR_ALLOC:
+            printf("AllocExpr:\n");
+            print_ast(node->alloc_expr.size_expr, indent + 1);
+            break;
+        case AST_EXPR_NULLPTR:
+            printf("NullptrExpr\n");
             break;
         case AST_EXPR_VAR:
             printf("VarExpr: %s\n", node->var.name);
@@ -670,10 +758,9 @@ static BinaryOp get_bin_op(TokenType type) {
 }
 
 static ASTNode *parse_expression(int min_prec);
-static Type *parse_type_specifier(void);
-static Type *parse_declarator_suffixes(Type *base_type);
+static Type *parse_type(void);
 
-static ASTNode *parse_primary_basic(void) {
+static ASTNode *parse_primary(void) {
     if (tok->type == TOKEN_NUM) {
         int val = atoi(tok->value);
         consume(TOKEN_NUM, "Expected number");
@@ -690,6 +777,26 @@ static ASTNode *parse_primary_basic(void) {
         char *val = tok->value;
         consume(TOKEN_STRING, "Expected string literal");
         return new_ast_string_lit(val);
+    }
+
+    if (match(TOKEN_NULLPTR)) {
+        return new_ast_nullptr();
+    }
+
+    if (match(TOKEN_ALLOC)) {
+        consume(TOKEN_LPAREN, "Expected '(' after alloc");
+        ASTNode *size = parse_expression(0);
+        consume(TOKEN_RPAREN, "Expected ')' after alloc size");
+        return new_ast_alloc(size);
+    }
+
+    if (match(TOKEN_SIZEOF)) {
+        consume(TOKEN_LPAREN, "Expected '(' after sizeof");
+        // Simplified: sizeof usually takes a type in NeoC?
+        // Let's support both type and expression if possible, but start with type.
+        Type *t = parse_type();
+        consume(TOKEN_RPAREN, "Expected ')' after sizeof");
+        return new_ast_num(type_size(t)); // Evaluate sizeof at compile time
     }
 
     if (tok->type == TOKEN_IDENT) {
@@ -729,7 +836,7 @@ static ASTNode *parse_primary_basic(void) {
 }
 
 static ASTNode *parse_postfix(void) {
-    ASTNode *expr = parse_primary_basic();
+    ASTNode *expr = parse_primary();
 
     while (1) {
         if (match(TOKEN_LBRACK)) {
@@ -746,16 +853,6 @@ static ASTNode *parse_postfix(void) {
             char *member_name = tok->value;
             consume(TOKEN_IDENT, "Expected member name");
             expr = new_ast_member(expr, member_name);
-            continue;
-        }
-
-        if (match(TOKEN_ARROW)) {
-            if (tok->type != TOKEN_IDENT) {
-                error_at("input", tok->line, tok->col, "Expected member name identifier");
-            }
-            char *member_name = tok->value;
-            consume(TOKEN_IDENT, "Expected member name");
-            expr = new_ast_member(new_ast_deref(expr), member_name);
             continue;
         }
 
@@ -809,52 +906,39 @@ static ASTNode *parse_expression(int min_prec) {
     return left;
 }
 
-static Type *parse_type_specifier(void) {
+static Type *parse_type(void) {
     Type *t = NULL;
-    if (match(TOKEN_INT)) {
-        t = new_type_int();
-    } else if (match(TOKEN_BOOL)) {
-        t = new_type_bool();
-    } else if (match(TOKEN_FLOAT)) {
-        t = new_type_float();
-    } else if (match(TOKEN_CHAR)) {
-        t = new_type_int(); // Treat char as int for simplicity and robust 4-byte alignment
-    } else if (match(TOKEN_STRUCT)) {
+    if (match(TOKEN_VOID)) t = new_type_void();
+    else if (match(TOKEN_I32)) t = new_type_i32();
+    else if (match(TOKEN_I64)) t = new_type_i64();
+    else if (match(TOKEN_F32)) t = new_type_f32();
+    else if (match(TOKEN_F64)) t = new_type_f64();
+    else if (match(TOKEN_BOOL_TYPE)) t = new_type_bool();
+    else if (match(TOKEN_PTR_TYPE)) t = new_type_ptr(new_type_void());
+    else if (match(TOKEN_STRUCT)) {
         if (tok->type != TOKEN_IDENT) {
-            error_at("input", tok->line, tok->col, "Expected struct tag identifier");
+            error_at("input", tok->line, tok->col, "Expected struct name");
         }
         char *tag = tok->value;
-        consume(TOKEN_IDENT, "Expected struct tag");
-
+        consume(TOKEN_IDENT, "Expected struct name");
         t = find_struct_tag(tag);
-        if (!t) {
-            error("Undefined struct tag: %s", tag);
-        }
+        if (!t) error("Undefined struct: %s", tag);
         t = copy_type(t);
-    } else {
-        error_at("input", tok->line, tok->col, "Expected type specifier");
-    }
-
-    while (match(TOKEN_STAR)) {
-        t = new_type_ptr(t);
-    }
-
-    return t;
-}
-
-static Type *parse_declarator_suffixes(Type *base_type) {
-    if (match(TOKEN_LBRACK)) {
-        if (tok->type != TOKEN_NUM) {
-            error_at("input", tok->line, tok->col, "Expected constant array size");
-        }
+    } else if (match(TOKEN_LBRACK)) {
+        Type *elem = parse_type();
+        consume(TOKEN_SEMI, "Expected ';' between array type and size");
+        if (tok->type != TOKEN_NUM) error("Expected constant array size");
         int size = atoi(tok->value);
-        consume(TOKEN_NUM, "Expected constant number");
+        consume(TOKEN_NUM, "Expected size");
         consume(TOKEN_RBRACK, "Expected ']'");
-
-        Type *inner = parse_declarator_suffixes(base_type);
-        return new_type_array(inner, size);
+        t = new_type_array(elem, size);
+    } else {
+        error_at("input", tok->line, tok->col, "Expected type");
     }
-    return base_type;
+
+    // Support ptr chain or C-style * if needed? context.md is minimalist.
+    // Let's stick to 'ptr' for now.
+    return t;
 }
 
 static ASTNode *parse_statement(void) {
@@ -865,269 +949,219 @@ static ASTNode *parse_statement(void) {
     }
 
     if (match(TOKEN_IF)) {
-        consume(TOKEN_LPAREN, "Expected '(' after if");
         ASTNode *cond = parse_expression(0);
-        consume(TOKEN_RPAREN, "Expected ')' after condition");
+        consume(TOKEN_LBRACE, "Expected '{' after if condition");
+        ASTNode **then_stmts = NULL;
+        int then_count = 0;
+        while (tok->type != TOKEN_RBRACE) {
+            then_stmts = realloc(then_stmts, sizeof(ASTNode*) * (then_count + 1));
+            then_stmts[then_count++] = parse_statement();
+        }
+        consume(TOKEN_RBRACE, "Expected '}' after if body");
+        ASTNode *then_branch = new_ast_block(then_stmts, then_count);
 
-        ASTNode *then_branch = parse_statement();
         ASTNode *else_branch = NULL;
         if (match(TOKEN_ELSE)) {
-            else_branch = parse_statement();
+            if (match(TOKEN_LBRACE)) {
+                ASTNode **else_stmts = NULL;
+                int else_count = 0;
+                while (tok->type != TOKEN_RBRACE) {
+                    else_stmts = realloc(else_stmts, sizeof(ASTNode*) * (else_count + 1));
+                    else_stmts[else_count++] = parse_statement();
+                }
+                consume(TOKEN_RBRACE, "Expected '}' after else body");
+                else_branch = new_ast_block(else_stmts, else_count);
+            } else if (tok->type == TOKEN_IF) {
+                else_branch = parse_statement();
+            } else {
+                error("Expected '{' or 'if' after else");
+            }
         }
         return new_ast_if(cond, then_branch, else_branch);
     }
 
     if (match(TOKEN_WHILE)) {
-        consume(TOKEN_LPAREN, "Expected '(' after while");
         ASTNode *cond = parse_expression(0);
-        consume(TOKEN_RPAREN, "Expected ')' after condition");
-
-        ASTNode *body = parse_statement();
-        return new_ast_while(cond, body);
-    }
-
-    if (match(TOKEN_DO)) {
-        ASTNode *body = parse_statement();
-        consume(TOKEN_WHILE, "Expected 'while' after do body");
-        consume(TOKEN_LPAREN, "Expected '(' after while");
-        ASTNode *cond = parse_expression(0);
-        consume(TOKEN_RPAREN, "Expected ')' after condition");
-        consume(TOKEN_SEMI, "Expected ';' after do-while statement");
-        return new_ast_do_while(cond, body);
+        consume(TOKEN_LBRACE, "Expected '{' after while condition");
+        ASTNode **stmts = NULL;
+        int count = 0;
+        while (tok->type != TOKEN_RBRACE) {
+            stmts = realloc(stmts, sizeof(ASTNode*) * (count + 1));
+            stmts[count++] = parse_statement();
+        }
+        consume(TOKEN_RBRACE, "Expected '}' after while body");
+        return new_ast_while(cond, new_ast_block(stmts, count));
     }
 
     if (match(TOKEN_FOR)) {
-        consume(TOKEN_LPAREN, "Expected '(' after for");
-
-        ASTNode *init = NULL;
-        if (tok->type == TOKEN_INT || tok->type == TOKEN_BOOL || tok->type == TOKEN_FLOAT || tok->type == TOKEN_CHAR || tok->type == TOKEN_STRUCT) {
-            Type *base_type = parse_type_specifier();
-            if (tok->type != TOKEN_IDENT) {
-                error_at("input", tok->line, tok->col, "Expected variable identifier");
-            }
-            char *name = tok->value;
-            consume(TOKEN_IDENT, "Expected identifier");
-            Type *full_type = parse_declarator_suffixes(base_type);
-            ASTNode *init_val = NULL;
-            if (match(TOKEN_ASSIGN)) {
-                init_val = parse_expression(0);
-            }
-            init = new_ast_decl(full_type, name, init_val);
-            consume(TOKEN_SEMI, "Expected ';' after for init declaration");
-        } else {
-            if (tok->type != TOKEN_SEMI) {
-                init = parse_expression(0);
-            }
-            consume(TOKEN_SEMI, "Expected ';' after for init expression");
+        // Simple for: for cond { ... } or more complex?
+        // Let's assume for now it's for i in range { ... } or similar if we wanted, 
+        // but context.md mentions 'for' and 'in'.
+        // For now, let's implement a simple for cond { ... } like while.
+        ASTNode *cond = parse_expression(0);
+        consume(TOKEN_LBRACE, "Expected '{' after for condition");
+        ASTNode **stmts = NULL;
+        int count = 0;
+        while (tok->type != TOKEN_RBRACE) {
+            stmts = realloc(stmts, sizeof(ASTNode*) * (count + 1));
+            stmts[count++] = parse_statement();
         }
-
-        ASTNode *cond = NULL;
-        if (tok->type != TOKEN_SEMI) {
-            cond = parse_expression(0);
-        }
-        consume(TOKEN_SEMI, "Expected ';' after for condition");
-
-        ASTNode *post = NULL;
-        if (tok->type != TOKEN_RPAREN) {
-            post = parse_expression(0);
-        }
-        consume(TOKEN_RPAREN, "Expected ')' after for header");
-
-        ASTNode *body = parse_statement();
-        return new_ast_for(init, cond, post, body);
+        consume(TOKEN_RBRACE, "Expected '}' after for body");
+        return new_ast_for(NULL, cond, NULL, new_ast_block(stmts, count));
     }
 
-    if (match(TOKEN_LBRACE)) {
-        ASTNode **stmts = NULL;
-        int stmt_count = 0;
-        while (tok && tok->type != TOKEN_RBRACE && tok->type != TOKEN_EOF) {
-            ASTNode *stmt = parse_statement();
-            stmts = realloc(stmts, sizeof(ASTNode*) * (stmt_count + 1));
-            stmts[stmt_count++] = stmt;
-        }
-        consume(TOKEN_RBRACE, "Expected '}' to end block");
-        return new_ast_block(stmts, stmt_count);
+    if (match(TOKEN_DEFER)) {
+        ASTNode *stmt = parse_statement();
+        return new_ast_defer(stmt);
     }
 
     if (match(TOKEN_BREAK)) {
-        consume(TOKEN_SEMI, "Expected ';' after break");
+        consume(TOKEN_SEMI, "Expected ';'");
         return new_ast_break();
     }
 
     if (match(TOKEN_CONTINUE)) {
-        consume(TOKEN_SEMI, "Expected ';' after continue");
+        consume(TOKEN_SEMI, "Expected ';'");
         return new_ast_continue();
     }
 
-    // Struct definition at statement level: struct Tag { members... };
-    if (tok->type == TOKEN_STRUCT && tok->next && tok->next->type == TOKEN_IDENT && tok->next->next && tok->next->next->type == TOKEN_LBRACE) {
-        consume(TOKEN_STRUCT, "Expected struct");
-        char *tag = tok->value;
-        consume(TOKEN_IDENT, "Expected tag");
-        consume(TOKEN_LBRACE, "Expected '{'");
-
-        Field *fields = NULL;
-        int field_count = 0;
+    if (match(TOKEN_LBRACE)) {
+        ASTNode **stmts = NULL;
+        int count = 0;
         while (tok->type != TOKEN_RBRACE) {
-            Type *base_type = parse_type_specifier();
-            if (tok->type != TOKEN_IDENT) {
-                error_at("input", tok->line, tok->col, "Expected field name identifier");
-            }
-            char *name = tok->value;
-            consume(TOKEN_IDENT, "Expected field name");
-
-            Type *full_type = parse_declarator_suffixes(base_type);
-            consume(TOKEN_SEMI, "Expected ';' after field declaration");
-
-            fields = realloc(fields, sizeof(Field) * (field_count + 1));
-            fields[field_count].name = xstrdup(name);
-            fields[field_count].type = full_type;
-            fields[field_count].offset = 0;
-            field_count++;
+            stmts = realloc(stmts, sizeof(ASTNode*) * (count + 1));
+            stmts[count++] = parse_statement();
         }
         consume(TOKEN_RBRACE, "Expected '}'");
-        consume(TOKEN_SEMI, "Expected ';' after struct definition");
-
-        Type *struct_type = new_type_struct(tag, fields, field_count);
-        type_size(struct_type); // Calculate offsets
-        add_struct_tag(tag, struct_type);
-
-        return new_ast_struct_def(tag, fields, field_count);
+        return new_ast_block(stmts, count);
     }
 
-    // Variable declaration? e.g. int x; struct Point p; float f;
-    if (tok->type == TOKEN_INT || tok->type == TOKEN_BOOL || tok->type == TOKEN_FLOAT || tok->type == TOKEN_CHAR || tok->type == TOKEN_STRUCT) {
-        Type *base_type = parse_type_specifier();
-        if (tok->type != TOKEN_IDENT) {
-            error_at("input", tok->line, tok->col, "Expected variable name identifier");
-        }
+    // Variable declaration: let x: i32 = 10; or mut y: i32;
+    if (tok->type == TOKEN_LET || tok->type == TOKEN_MUT) {
+        bool is_mut = (tok->type == TOKEN_MUT);
+        tok = tok->next;
+
+        if (tok->type != TOKEN_IDENT) error("Expected identifier");
         char *name = tok->value;
         consume(TOKEN_IDENT, "Expected identifier");
 
-        Type *full_type = parse_declarator_suffixes(base_type);
+        consume(TOKEN_COLON, "Expected ':' after variable name");
+        Type *t = parse_type();
 
         ASTNode *init = NULL;
         if (match(TOKEN_ASSIGN)) {
             init = parse_expression(0);
         }
-        consume(TOKEN_SEMI, "Expected ';' after variable declaration");
-        return new_ast_decl(full_type, name, init);
+        consume(TOKEN_SEMI, "Expected ';' after declaration");
+        return new_ast_decl(t, name, init, is_mut);
     }
 
     // Expression statement
     ASTNode *expr = parse_expression(0);
-    consume(TOKEN_SEMI, "Expected ';' after expression statement");
+    consume(TOKEN_SEMI, "Expected ';' after expression");
     return new_ast_expr_stmt(expr);
 }
 
 static ASTNode *parse_function(void) {
-    consume(TOKEN_INT, "Expected 'int' return type");
+    consume(TOKEN_FN, "Expected 'fn'");
 
-    if (tok->type != TOKEN_IDENT) {
-        error_at("input", tok->line, tok->col, "Expected function name identifier");
-    }
-    char *func_name = tok->value;
-    consume(TOKEN_IDENT, "Expected function name");
+    if (tok->type != TOKEN_IDENT) error("Expected function name");
+    char *name = tok->value;
+    consume(TOKEN_IDENT, "Expected name");
 
-    consume(TOKEN_LPAREN, "Expected '(' after function name");
-
+    consume(TOKEN_LPAREN, "Expected '('");
     char **params = NULL;
     Type **param_types = NULL;
-    int param_count = 0;
+    int count = 0;
 
     if (tok->type != TOKEN_RPAREN) {
         while (1) {
-            Type *base_type = parse_type_specifier();
-            if (tok->type != TOKEN_IDENT) {
-                error_at("input", tok->line, tok->col, "Expected parameter name identifier");
-            }
-            char *p_name = tok->value;
-            consume(TOKEN_IDENT, "Expected identifier");
+            if (tok->type != TOKEN_IDENT) error("Expected parameter name");
+            char *pname = tok->value;
+            consume(TOKEN_IDENT, "Expected pname");
+            consume(TOKEN_COLON, "Expected ':'");
+            Type *ptype = parse_type();
 
-            Type *full_type = parse_declarator_suffixes(base_type);
+            params = realloc(params, sizeof(char*) * (count + 1));
+            param_types = realloc(param_types, sizeof(Type*) * (count + 1));
+            params[count] = xstrdup(pname);
+            param_types[count] = ptype;
+            count++;
 
-            params = realloc(params, sizeof(char*) * (param_count + 1));
-            param_types = realloc(param_types, sizeof(Type*) * (param_count + 1));
-            params[param_count] = xstrdup(p_name);
-            param_types[param_count] = full_type;
-            param_count++;
-
-            if (!match(TOKEN_COMMA)) {
-                break;
-            }
+            if (!match(TOKEN_COMMA)) break;
         }
     }
-    consume(TOKEN_RPAREN, "Expected ')' after parameters");
-    consume(TOKEN_LBRACE, "Expected '{' to start function body");
+    consume(TOKEN_RPAREN, "Expected ')'");
 
+    Type *ret_type = new_type_void();
+    if (match(TOKEN_ARROW)) {
+        ret_type = parse_type();
+    }
+
+    consume(TOKEN_LBRACE, "Expected '{'");
     ASTNode **stmts = NULL;
     int stmt_count = 0;
-
-    while (tok && tok->type != TOKEN_RBRACE && tok->type != TOKEN_EOF) {
-        ASTNode *stmt = parse_statement();
+    while (tok->type != TOKEN_RBRACE) {
         stmts = realloc(stmts, sizeof(ASTNode*) * (stmt_count + 1));
-        if (!stmts) {
-            error("Out of memory during statement parsing");
-        }
-        stmts[stmt_count++] = stmt;
+        stmts[stmt_count++] = parse_statement();
+    }
+    consume(TOKEN_RBRACE, "Expected '}'");
+
+    return new_ast_func(name, params, param_types, count, stmts, stmt_count, ret_type);
+}
+
+static ASTNode *parse_top_level(void) {
+    if (match(TOKEN_IMPORT)) {
+        if (tok->type != TOKEN_STRING) error("Expected string after import");
+        char *path = tok->value;
+        consume(TOKEN_STRING, "Expected path");
+        consume(TOKEN_SEMI, "Expected ';'");
+        return new_ast_import(path);
     }
 
-    consume(TOKEN_RBRACE, "Expected '}' to end function body");
+    if (match(TOKEN_STRUCT)) {
+        if (tok->type != TOKEN_IDENT) error("Expected struct name");
+        char *name = tok->value;
+        consume(TOKEN_IDENT, "Expected name");
+        consume(TOKEN_LBRACE, "Expected '{'");
 
-    return new_ast_func(func_name, params, param_types, param_count, stmts, stmt_count);
+        Field *fields = NULL;
+        int count = 0;
+        while (tok->type != TOKEN_RBRACE) {
+            if (tok->type != TOKEN_IDENT) error("Expected field name");
+            char *fname = tok->value;
+            consume(TOKEN_IDENT, "Expected fname");
+            consume(TOKEN_COLON, "Expected ':'");
+            Type *ftype = parse_type();
+            consume(TOKEN_SEMI, "Expected ';'");
+
+            fields = realloc(fields, sizeof(Field) * (count + 1));
+            fields[count].name = xstrdup(fname);
+            fields[count].type = ftype;
+            fields[count].offset = 0;
+            count++;
+        }
+        consume(TOKEN_RBRACE, "Expected '}'");
+        consume(TOKEN_SEMI, "Expected ';'");
+
+        Type *st = new_type_struct(name, fields, count);
+        type_size(st);
+        add_struct_tag(name, st);
+        return new_ast_struct_def(name, fields, count);
+    }
+
+    return parse_function();
 }
 
 ASTNode *parse(Token *tokens) {
     tok = tokens;
-
     ASTNode **decls = NULL;
-    int decl_count = 0;
+    int count = 0;
 
     while (tok && tok->type != TOKEN_EOF) {
-        if (tok->type == TOKEN_STRUCT && tok->next && tok->next->type == TOKEN_IDENT && tok->next->next && tok->next->next->type == TOKEN_LBRACE) {
-            consume(TOKEN_STRUCT, "Expected struct");
-            char *tag = tok->value;
-            consume(TOKEN_IDENT, "Expected tag");
-            consume(TOKEN_LBRACE, "Expected '{'");
-
-            Field *fields = NULL;
-            int field_count = 0;
-            while (tok->type != TOKEN_RBRACE) {
-                Type *base_type = parse_type_specifier();
-                if (tok->type != TOKEN_IDENT) {
-                    error_at("input", tok->line, tok->col, "Expected field name");
-                }
-                char *name = tok->value;
-                consume(TOKEN_IDENT, "Expected field name");
-
-                Type *full_type = parse_declarator_suffixes(base_type);
-                consume(TOKEN_SEMI, "Expected ';' after field declaration");
-
-                fields = realloc(fields, sizeof(Field) * (field_count + 1));
-                fields[field_count].name = xstrdup(name);
-                fields[field_count].type = full_type;
-                fields[field_count].offset = 0;
-                field_count++;
-            }
-            consume(TOKEN_RBRACE, "Expected '}'");
-            consume(TOKEN_SEMI, "Expected ';' after struct definition");
-
-            Type *struct_type = new_type_struct(tag, fields, field_count);
-            type_size(struct_type);
-            add_struct_tag(tag, struct_type);
-
-            ASTNode *def = new_ast_struct_def(tag, fields, field_count);
-            decls = realloc(decls, sizeof(ASTNode*) * (decl_count + 1));
-            decls[decl_count++] = def;
-        } else {
-            ASTNode *func = parse_function();
-            decls = realloc(decls, sizeof(ASTNode*) * (decl_count + 1));
-            if (!decls) {
-                error("Out of memory during parsing");
-            }
-            decls[decl_count++] = func;
-        }
+        decls = realloc(decls, sizeof(ASTNode*) * (count + 1));
+        decls[count++] = parse_top_level();
     }
 
-    return new_ast_program(decls, decl_count);
+    return new_ast_program(decls, count);
 }

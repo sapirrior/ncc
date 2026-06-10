@@ -10,6 +10,9 @@
 #include <sys/mman.h>
 #include <signal.h>
 #include <ucontext.h>
+#include <time.h>
+
+#define NEOC_VERSION "0.1.0"
 
 static void *g_exec_mem = NULL;
 static size_t g_exec_size = 0;
@@ -37,7 +40,7 @@ static void sigsegv_handler(int sig, siginfo_t *info, void *context) {
     exit(128 + sig);
 }
 
-static char *read_file(const char *path) {
+static char *read_source_file(const char *path) {
     FILE *fp = fopen(path, "rb");
     if (!fp) {
         error("Cannot open file: %s", path);
@@ -54,8 +57,70 @@ static char *read_file(const char *path) {
     return buf;
 }
 
+static void jit_run(ASTNode *ast) {
+    if (!set_codegen_target("arm64")) {
+        error("Failed to set codegen target to arm64");
+    }
+
+    Emitter e;
+    emitter_init(&e, NULL, true);
+    generate_code_binary(ast, &e);
+
+    int main_offset = emitter_find_symbol_offset(&e, "main");
+    if (main_offset == -1) {
+        error("JIT error: main function not found");
+    }
+
+    size_t page_size = sysconf(_SC_PAGESIZE);
+    size_t alloc_size = (e.size + page_size - 1) & ~(page_size - 1);
+
+    void *exec_mem = mmap(NULL, alloc_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (exec_mem == MAP_FAILED) {
+        perror("mmap failed");
+        exit(1);
+    }
+
+    g_exec_mem = exec_mem;
+    g_exec_size = e.size;
+
+    memcpy(exec_mem, e.buffer, e.size);
+    __builtin___clear_cache((char *)exec_mem, (char *)exec_mem + e.size);
+
+    if (mprotect(exec_mem, alloc_size, PROT_READ | PROT_EXEC) == -1) {
+        perror("mprotect failed");
+        exit(1);
+    }
+
+    int (*main_fn)(void) = (int (*)(void))((char *)exec_mem + main_offset);
+    int exit_code = main_fn();
+
+    munmap(exec_mem, alloc_size);
+    emitter_free(&e);
+    exit(exit_code);
+}
+
+static void compile_to_binary(ASTNode *ast, const char *out_name) {
+    char asm_name[256];
+    sprintf(asm_name, "%s.s", out_name);
+    
+    FILE *out_fp = fopen(asm_name, "w");
+    if (!out_fp) error("Cannot open output assembly file");
+    
+    generate_arm64(ast, out_fp);
+    fclose(out_fp);
+    
+    char cmd[512];
+    sprintf(cmd, "clang -o %s %s -ldl -lm", out_name, asm_name);
+    int res = system(cmd);
+    
+    remove(asm_name);
+    
+    if (res != 0) {
+        error("Assembly/Linking failed");
+    }
+}
+
 int main(int argc, char **argv) {
-    // Register crash signal handler
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = sigsegv_handler;
@@ -63,90 +128,61 @@ int main(int argc, char **argv) {
     sigaction(SIGSEGV, &sa, NULL);
     sigaction(SIGILL, &sa, NULL);
 
-    if (argc != 2) {
-        fprintf(stderr, "Nano C Compiler (ncc)\n");
-        fprintf(stderr, "Usage: %s <source_file.c>\n", argv[0]);
-        return 1;
+    if (argc < 2) {
+        printf("NeoC Compiler (ncc) v%s\n", NEOC_VERSION);
+        printf("Usage:\n");
+        printf("  ncc -v              : Print version\n");
+        printf("  ncc -r <file.nc>    : Compile and run in memory\n");
+        printf("  ncc <file.nc> -o <n>: Compile to standalone binary\n");
+        printf("  ncc <file.nc>       : Safe default build (random filename)\n");
+        return 0;
     }
 
-    const char *filename = argv[1];
-    char *source = read_file(filename);
+    bool run_mode = false;
+    const char *in_file = NULL;
+    const char *out_file = NULL;
 
-    // 1. Tokenize
-    Token *tokens = tokenize(filename, source);
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-v") == 0) {
+            printf("NeoC v%s\n", NEOC_VERSION);
+            return 0;
+        } else if (strcmp(argv[i], "-r") == 0) {
+            run_mode = true;
+        } else if (strcmp(argv[i], "-o") == 0) {
+            if (i + 1 < argc) {
+                out_file = argv[++i];
+            } else {
+                error("Expected output name after -o");
+            }
+        } else {
+            in_file = argv[i];
+        }
+    }
 
-    // 2. Parse
+    if (!in_file) {
+        error("No input file provided");
+    }
+
+    char *source = read_source_file(in_file);
+    Token *tokens = tokenize(in_file, source);
     ASTNode *ast = parse(tokens);
 
-    // 3. Set codegen target to arm64
-    if (!set_codegen_target("arm64")) {
-        error("Failed to set codegen target to arm64");
+    if (run_mode) {
+        jit_run(ast);
+    } else {
+        if (!out_file) {
+            srand(time(NULL));
+            char rand_name[16];
+            sprintf(rand_name, "%c.out", 'a' + (rand() % 26));
+            out_file = rand_name;
+            printf("Compiling to default output: %s\n", out_file);
+        }
+        compile_to_binary(ast, out_file);
     }
 
-    // 4. Compile to binary in memory
-    Emitter e;
-    emitter_init(&e, NULL, true); // true = binary_mode
-    generate_code_binary(ast, &e);
-
-    // Print JIT buffer bytes
-    printf("[DEBUG] JIT code bytes:\n");
-    for (int i = 0; i < e.size; i++) {
-        printf("%02x ", e.buffer[i]);
-        if ((i + 1) % 4 == 0) printf(" | ");
-        if ((i + 1) % 16 == 0) printf("\n");
-    }
-    printf("\n");
-
-    // 5. Find main function offset
-    int main_offset = emitter_find_symbol_offset(&e, "main");
-    if (main_offset == -1) {
-        error("JIT error: main function not found");
-    }
-
-    // 6. Allocate executable memory aligned to page size
-    size_t page_size = sysconf(_SC_PAGESIZE);
-    size_t alloc_size = (e.size + page_size - 1) & ~(page_size - 1);
-
-    void *exec_mem = mmap(NULL, alloc_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (exec_mem == MAP_FAILED) {
-        perror("mmap failed");
-        emitter_free(&e);
-        free_ast(ast);
-        free_tokens(tokens);
-        free(source);
-        return 1;
-    }
-
-    g_exec_mem = exec_mem;
-    g_exec_size = e.size;
-
-    // Copy compiled bytes into executable memory
-    memcpy(exec_mem, e.buffer, e.size);
-
-    // Flush the instruction cache for ARM64 compatibility
-    __builtin___clear_cache((char *)exec_mem, (char *)exec_mem + e.size);
-
-    // Apply execute protection
-    if (mprotect(exec_mem, alloc_size, PROT_READ | PROT_EXEC) == -1) {
-        perror("mprotect failed");
-        munmap(exec_mem, alloc_size);
-        emitter_free(&e);
-        free_ast(ast);
-        free_tokens(tokens);
-        free(source);
-        return 1;
-    }
-
-    // 7. Call the compiled main function
-    int (*main_fn)(void) = (int (*)(void))((char *)exec_mem + main_offset);
-    int exit_code = main_fn();
-
-    // 8. Cleanup resources
-    munmap(exec_mem, alloc_size);
-    emitter_free(&e);
     free_ast(ast);
     free_tokens(tokens);
     free(source);
 
-    return exit_code;
+    return 0;
 }

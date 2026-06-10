@@ -1,6 +1,6 @@
 // Expected: 60
-int main() {
-    int arr[5];
+fn main() -> i32 {
+    mut arr: [i32; 5];
     arr[0] = 10;
     arr[1] = 20;
     arr[2] = 30;
@@ -8,3 +8,4 @@ int main() {
     arr[4] = 50;
     return arr[1] + arr[3];
 }
+

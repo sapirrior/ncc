@@ -1,4 +1,5 @@
 // Expected: 12
-int main() {
+fn main() -> i32 {
     return 2 + 3 * 4 - 4 / 2;
 }
+

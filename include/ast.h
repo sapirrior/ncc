@@ -4,9 +4,12 @@
 #include "common.h"
 
 typedef enum {
-    KIND_INT,
+    KIND_VOID,
+    KIND_I32,
+    KIND_I64,
+    KIND_F32,
+    KIND_F64,
     KIND_BOOL,
-    KIND_FLOAT,
     KIND_ARRAY,
     KIND_STRUCT,
     KIND_PTR
@@ -55,6 +58,8 @@ typedef enum {
     AST_STMT_BLOCK,
     AST_STMT_BREAK,
     AST_STMT_CONTINUE,
+    AST_STMT_DEFER,
+    AST_STMT_IMPORT,
     AST_EXPR_BINARY,
     AST_EXPR_UNARY,
     AST_EXPR_ASSIGN,
@@ -67,6 +72,8 @@ typedef enum {
     AST_EXPR_INDEX,
     AST_EXPR_ADDR,
     AST_EXPR_DEREF,
+    AST_EXPR_ALLOC,
+    AST_EXPR_NULLPTR,
 } ASTNodeType;
 
 typedef enum {
@@ -95,6 +102,7 @@ typedef struct ASTNode {
             int param_count;
             struct ASTNode **stmts;
             int stmt_count;
+            Type *return_type;
         } func;
 
         // Struct definition statement
@@ -119,6 +127,7 @@ typedef struct ASTNode {
             Type *var_type;
             char *name;
             struct ASTNode *init; // Initializer expression (optional)
+            bool is_mut;
         } decl_stmt;
 
         // If statement
@@ -147,6 +156,16 @@ typedef struct ASTNode {
             struct ASTNode **stmts;
             int stmt_count;
         } block;
+
+        // Defer statement
+        struct {
+            struct ASTNode *stmt;
+        } defer_stmt;
+
+        // Import statement
+        struct {
+            char *path;
+        } import_stmt;
 
         // Function call expression
         struct {
@@ -196,6 +215,11 @@ typedef struct ASTNode {
             struct ASTNode *expr;
         } deref;
 
+        // Alloc: alloc(size)
+        struct {
+            struct ASTNode *size_expr;
+        } alloc_expr;
+
         // Variable reference
         struct {
             char *name;
@@ -219,9 +243,12 @@ typedef struct ASTNode {
 } ASTNode;
 
 // Type helper prototypes
-Type *new_type_int(void);
+Type *new_type_void(void);
+Type *new_type_i32(void);
+Type *new_type_i64(void);
+Type *new_type_f32(void);
+Type *new_type_f64(void);
 Type *new_type_bool(void);
-Type *new_type_float(void);
 Type *new_type_array(Type *elem_type, int size);
 Type *new_type_struct(const char *name, Field *fields, int field_count);
 Type *new_type_ptr(Type *ptr_to);
@@ -232,16 +259,18 @@ Type *copy_type(Type *type);
 
 // Helper function prototypes for AST creation and printing
 ASTNode *new_ast_program(ASTNode **decls, int decl_count);
-ASTNode *new_ast_func(const char *name, char **params, Type **param_types, int param_count, ASTNode **stmts, int stmt_count);
+ASTNode *new_ast_func(const char *name, char **params, Type **param_types, int param_count, ASTNode **stmts, int stmt_count, Type *return_type);
 ASTNode *new_ast_struct_def(const char *name, Field *fields, int field_count);
 ASTNode *new_ast_return(ASTNode *expr);
 ASTNode *new_ast_expr_stmt(ASTNode *expr);
-ASTNode *new_ast_decl(Type *var_type, const char *name, ASTNode *init);
+ASTNode *new_ast_decl(Type *var_type, const char *name, ASTNode *init, bool is_mut);
 ASTNode *new_ast_if(ASTNode *cond, ASTNode *then_branch, ASTNode *else_branch);
 ASTNode *new_ast_while(ASTNode *cond, ASTNode *body);
 ASTNode *new_ast_do_while(ASTNode *cond, ASTNode *body);
 ASTNode *new_ast_for(ASTNode *init, ASTNode *cond, ASTNode *post, ASTNode *body);
 ASTNode *new_ast_block(ASTNode **stmts, int stmt_count);
+ASTNode *new_ast_defer(ASTNode *stmt);
+ASTNode *new_ast_import(const char *path);
 ASTNode *new_ast_break(void);
 ASTNode *new_ast_continue(void);
 ASTNode *new_ast_call(const char *name, ASTNode **args, int arg_count);
@@ -252,6 +281,8 @@ ASTNode *new_ast_member(ASTNode *expr, const char *member_name);
 ASTNode *new_ast_index(ASTNode *expr, ASTNode *index);
 ASTNode *new_ast_addr(ASTNode *expr);
 ASTNode *new_ast_deref(ASTNode *expr);
+ASTNode *new_ast_alloc(ASTNode *size_expr);
+ASTNode *new_ast_nullptr(void);
 ASTNode *new_ast_var(const char *name);
 ASTNode *new_ast_num(int value);
 ASTNode *new_ast_float_lit(double value);

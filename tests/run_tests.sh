@@ -18,8 +18,8 @@ passed=0
 failed=0
 
 echo "Running integration tests in-memory..."
-for test_file in "$TEST_DIR"/test*.c; do
-    name=$(basename "$test_file" .c)
+for test_file in "$TEST_DIR"/test*.nc; do
+    name=$(basename "$test_file" .nc)
 
     # Extract expected exit code
     expected=$(grep -E "// Expected:" "$test_file" | awk '{print $3}')

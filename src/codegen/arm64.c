@@ -75,6 +75,9 @@ static void register_locals(ASTNode *node) {
             }
             register_locals(node->for_stmt.body);
             break;
+        case AST_STMT_DEFER:
+            register_locals(node->defer_stmt.stmt);
+            break;
         default:
             break;
     }
@@ -107,12 +110,13 @@ static Type *get_node_type(ASTNode *node) {
             if (t->kind == KIND_PTR) {
                 t = t->ptr_to;
             }
+            if (t->kind != KIND_STRUCT) error("Member access on non-struct type");
             for (int i = 0; i < t->struct_def.field_count; i++) {
                 if (strcmp(t->struct_def.fields[i].name, node->member.member_name) == 0) {
                     return t->struct_def.fields[i].type;
                 }
             }
-            error("Struct member not found in type lookup");
+            error("Struct member not found in type lookup: %s", node->member.member_name);
             return NULL;
         }
         case AST_EXPR_INDEX: {
@@ -120,20 +124,29 @@ static Type *get_node_type(ASTNode *node) {
             if (t->kind == KIND_PTR) {
                 return t->ptr_to;
             }
-            return t->array.elem_type;
+            if (t->kind == KIND_ARRAY) {
+                return t->array.elem_type;
+            }
+            error("Indexing non-array/non-pointer type");
+            return NULL;
         }
         case AST_EXPR_ADDR:
             return new_type_ptr(get_node_type(node->addr.expr));
-        case AST_EXPR_DEREF:
-            return get_node_type(node->deref.expr)->ptr_to;
+        case AST_EXPR_DEREF: {
+            Type *t = get_node_type(node->deref.expr);
+            if (t->kind != KIND_PTR) error("Dereferencing non-pointer type");
+            return t->ptr_to;
+        }
         case AST_EXPR_NUM:
-            return new_type_int();
+            return new_type_i32();
         case AST_EXPR_FLOAT_LIT:
-            return new_type_float();
+            return new_type_f32();
         case AST_EXPR_STRING_LIT:
-            return new_type_ptr(new_type_int());
+            return new_type_ptr(new_type_i32());
         case AST_EXPR_CALL:
-            return new_type_int();
+            // This is a bit of a hack without a global function symbol table.
+            // For now, assume i32.
+            return new_type_i32();
         case AST_EXPR_BINARY:
             if (node->binary.op >= OP_EQ && node->binary.op <= OP_GE) {
                 return new_type_bool();
@@ -146,8 +159,12 @@ static Type *get_node_type(ASTNode *node) {
             return get_node_type(node->unary.expr);
         case AST_EXPR_ASSIGN:
             return get_node_type(node->assign.left);
+        case AST_EXPR_ALLOC:
+            return new_type_ptr(new_type_void());
+        case AST_EXPR_NULLPTR:
+            return new_type_ptr(new_type_void());
         default:
-            return new_type_int();
+            return new_type_i32();
     }
 }
 
@@ -271,7 +288,7 @@ static void gen_node(ASTNode *node, Emitter *e) {
             for (int i = 0; i < node->func.param_count; i++) {
                 Symbol *sym = find_local(node->func.params[i]);
                 int size = type_size(sym->type);
-                if (sym->type->kind == KIND_FLOAT) {
+                if (sym->type->kind == KIND_F32) {
                     emit_fstr_imm(e, (FloatReg)i, REG_X29, -sym->offset);
                 } else if (size == 4) {
                     emit_str_imm(e, 4, (Reg)i, REG_X29, -sym->offset);
@@ -314,7 +331,7 @@ static void gen_node(ASTNode *node, Emitter *e) {
             if (node->decl_stmt.init) {
                 gen_node(node->decl_stmt.init, e); // Evaluates -> w0/x0/s0
                 emit_sub_imm(e, true, REG_X1, REG_X29, sym->offset);
-                if (sym->type->kind == KIND_FLOAT) {
+                if (sym->type->kind == KIND_F32) {
                     emit_fstr_imm(e, REG_S0, REG_X1, 0);
                 } else if (size == 4) {
                     emit_str_imm(e, 4, REG_X0, REG_X1, 0);
@@ -430,6 +447,22 @@ static void gen_node(ASTNode *node, Emitter *e) {
             }
             break;
 
+        case AST_STMT_DEFER:
+            // TODO: Implement defer execution at block exit
+            break;
+
+        case AST_STMT_IMPORT:
+            break;
+
+        case AST_EXPR_ALLOC:
+            gen_node(node->alloc_expr.size_expr, e);
+            emit_bl(e, "malloc");
+            break;
+
+        case AST_EXPR_NULLPTR:
+            emit_mov_imm(e, true, REG_X0, 0);
+            break;
+
         case AST_STMT_BREAK: {
             if (loop_depth == 0) {
                 error("break statement outside loop");
@@ -455,7 +488,7 @@ static void gen_node(ASTNode *node, Emitter *e) {
             for (int i = 0; i < node->call.arg_count; i++) {
                 Type *arg_type = get_node_type(node->call.args[i]);
                 gen_node(node->call.args[i], e);
-                if (arg_type && arg_type->kind == KIND_FLOAT) {
+                if (arg_type && arg_type->kind == KIND_F32) {
                     emit_fstr_preindex(e, REG_S0, REG_SP, -16);
                 } else {
                     emit_str_preindex(e, 8, REG_X0, REG_SP, -16);
@@ -468,7 +501,7 @@ static void gen_node(ASTNode *node, Emitter *e) {
             // Pop arguments in reverse order and assign to calling convention registers
             for (int i = node->call.arg_count - 1; i >= 0; i--) {
                 Type *arg_type = get_node_type(node->call.args[i]);
-                if (arg_type && arg_type->kind == KIND_FLOAT) {
+                if (arg_type && arg_type->kind == KIND_F32) {
                     emit_fldr_postindex(e, REG_S16, REG_SP, 16);
                     if (is_printf) {
                         emit_fcvt_d_s(e, float_arg_idx++, REG_S16);
@@ -490,7 +523,7 @@ static void gen_node(ASTNode *node, Emitter *e) {
 
             bool left_is_ptr = left_type && (left_type->kind == KIND_PTR || left_type->kind == KIND_ARRAY);
             bool right_is_ptr = right_type && (right_type->kind == KIND_PTR || right_type->kind == KIND_ARRAY);
-            bool is_float = (left_type && left_type->kind == KIND_FLOAT) || (right_type && right_type->kind == KIND_FLOAT);
+            bool is_float = (left_type && left_type->kind == KIND_F32) || (right_type && right_type->kind == KIND_F32);
 
             gen_node(node->binary.left, e);
             if (is_float) {
@@ -615,7 +648,7 @@ static void gen_node(ASTNode *node, Emitter *e) {
             switch (node->unary.op) {
                 case OP_NEG: {
                     Type *type = get_node_type(node->unary.expr);
-                    if (type && type->kind == KIND_FLOAT) {
+                    if (type && type->kind == KIND_F32) {
                         emit_fneg(e, REG_S0, REG_S0);
                     } else {
                         emit_neg_reg(e, false, REG_X0, REG_X0);
@@ -637,7 +670,7 @@ static void gen_node(ASTNode *node, Emitter *e) {
             int size = type_size(type);
 
             gen_node(node->assign.right, e); // RHS -> s0/w0/x0
-            if (type && type->kind == KIND_FLOAT) {
+            if (type && type->kind == KIND_F32) {
                 emit_fstr_preindex(e, REG_S0, REG_SP, -16);
                 gen_addr(node->assign.left, e); // LHS address -> x0
                 emit_fldr_postindex(e, REG_S1, REG_SP, 16);
@@ -666,7 +699,7 @@ static void gen_node(ASTNode *node, Emitter *e) {
             Type *type = get_node_type(node);
             int size = type_size(type);
             gen_addr(node, e); // address -> x0
-            if (type && type->kind == KIND_FLOAT) {
+            if (type && type->kind == KIND_F32) {
                 emit_fldr_imm(e, REG_S0, REG_X0, 0);
             } else if (type && type->kind != KIND_STRUCT && type->kind != KIND_ARRAY) {
                 emit_ldr_imm(e, size, REG_X0, REG_X0, 0);
@@ -682,7 +715,7 @@ static void gen_node(ASTNode *node, Emitter *e) {
             Type *type = get_node_type(node);
             int size = type_size(type);
             gen_node(node->deref.expr, e); // pointer value -> x0
-            if (type && type->kind == KIND_FLOAT) {
+            if (type && type->kind == KIND_F32) {
                 emit_fldr_imm(e, REG_S0, REG_X0, 0);
             } else if (type && type->kind != KIND_STRUCT && type->kind != KIND_ARRAY) {
                 emit_ldr_imm(e, size, REG_X0, REG_X0, 0);

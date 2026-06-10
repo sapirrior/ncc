@@ -5,23 +5,23 @@
 
 typedef enum {
     TOKEN_EOF = 0,
-    TOKEN_INT,       // 'int' keyword
-    TOKEN_BOOL,      // '_Bool' keyword
-    TOKEN_FLOAT,     // 'float' keyword
-    TOKEN_CHAR,      // 'char' keyword
-    TOKEN_STRUCT,    // 'struct' keyword
-    TOKEN_RETURN,    // 'return' keyword
-    TOKEN_IF,        // 'if' keyword
-    TOKEN_ELSE,      // 'else' keyword
-    TOKEN_WHILE,     // 'while' keyword
-    TOKEN_DO,        // 'do' keyword
-    TOKEN_FOR,       // 'for' keyword
-    TOKEN_BREAK,     // 'break' keyword
-    TOKEN_CONTINUE,  // 'continue' keyword
-    TOKEN_IDENT,     // Identifier
+
+    // NeoC Keywords (The 32 Budget)
+    TOKEN_I32, TOKEN_I64, TOKEN_F32, TOKEN_F64, TOKEN_BOOL_TYPE, TOKEN_PTR_TYPE, TOKEN_VOID,
+    TOKEN_LET, TOKEN_MUT, TOKEN_CONST, TOKEN_FN, TOKEN_STRUCT, TOKEN_ENUM, TOKEN_UNION,
+    TOKEN_IF, TOKEN_ELSE, TOKEN_WHILE, TOKEN_FOR, TOKEN_IN, TOKEN_RETURN, TOKEN_BREAK, TOKEN_CONTINUE, TOKEN_SWITCH, TOKEN_CASE,
+    TOKEN_ALLOC, TOKEN_FREE, TOKEN_DEFER, TOKEN_SIZEOF,
+    TOKEN_IMPORT, TOKEN_PUB, TOKEN_ASM, TOKEN_EXTERN,
+
+    // Literals and Identifiers
+    TOKEN_IDENT,
     TOKEN_NUM,       // Integer literal
     TOKEN_FLOAT_LIT, // Float literal
     TOKEN_STRING,    // String literal
+    TOKEN_NULL,      // 'null'
+    TOKEN_NULLPTR,   // 'nullptr'
+
+    // Delimiters and Punctuations
     TOKEN_LPAREN,    // '('
     TOKEN_RPAREN,    // ')'
     TOKEN_LBRACE,    // '{'
@@ -31,7 +31,9 @@ typedef enum {
     TOKEN_SEMI,      // ';'
     TOKEN_COMMA,     // ','
     TOKEN_DOT,       // '.'
+    TOKEN_COLON,     // ':'
     TOKEN_AMP,       // '&'
+    TOKEN_ARROW,     // '->'
 
     // Operators
     TOKEN_PLUS,      // '+'
@@ -47,7 +49,6 @@ typedef enum {
     TOKEN_LE,        // '<='
     TOKEN_GT,        // '>'
     TOKEN_GE,        // '>='
-    TOKEN_ARROW,     // '->'
 } TokenType;
 
 typedef struct Token {

@@ -14,12 +14,13 @@
   #define HAS_NOT_DEFINED 0
 #endif
 
-int main() {
-    if (HAS_LIMIT == 1) {
-        if (HAS_NOT_DEFINED == 1) {
+fn main() -> i32 {
+    if HAS_LIMIT == 1 {
+        if HAS_NOT_DEFINED == 1 {
             printf(MESSAGE);
             return LIMIT;
         }
     }
     return 0;
 }
+

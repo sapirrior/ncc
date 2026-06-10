@@ -1,12 +1,13 @@
 // Expected: 25
 struct Point {
-    int x;
-    int y;
+    x: i32;
+    y: i32;
 };
 
-int main() {
-    struct Point p;
+fn main() -> i32 {
+    mut p: struct Point;
     p.x = 10;
     p.y = 15;
     return p.x + p.y;
 }
+
