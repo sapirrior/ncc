@@ -401,6 +401,12 @@ Token *tokenize(const char *filename, const char *source) {
             p++; col++;
             continue;
         }
+        if (p[0] == ':' && p[1] == ':') {
+            cur->next = new_token(TOKEN_COLON_COLON, NULL, line, col);
+            cur = cur->next;
+            p += 2; col += 2;
+            continue;
+        }
         if (*p == ':') {
             cur->next = new_token(TOKEN_COLON, NULL, line, col);
             cur = cur->next;
@@ -625,6 +631,7 @@ void print_tokens(Token *tok) {
             case TOKEN_COMMA: printf("COMMA: ,\n"); break;
             case TOKEN_DOT: printf("DOT: .\n"); break;
             case TOKEN_COLON: printf("COLON: :\n"); break;
+            case TOKEN_COLON_COLON: printf("COLON_COLON: ::\n"); break;
             case TOKEN_AMP: printf("AMP: &\n"); break;
             case TOKEN_PLUS: printf("PLUS: +\n"); break;
             case TOKEN_MINUS: printf("MINUS: -\n"); break;

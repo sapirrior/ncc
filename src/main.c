@@ -110,7 +110,7 @@ static void compile_to_binary(ASTNode *ast, const char *out_name) {
     fclose(out_fp);
     
     char cmd[512];
-    sprintf(cmd, "clang -o %s %s -ldl -lm", out_name, asm_name);
+    sprintf(cmd, "clang -o %s %s src/libs/os.c -ldl -lm", out_name, asm_name);
     int res = system(cmd);
     
     remove(asm_name);

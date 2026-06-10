@@ -32,6 +32,7 @@ typedef enum {
     TOKEN_COMMA,     // ','
     TOKEN_DOT,       // '.'
     TOKEN_COLON,     // ':'
+    TOKEN_COLON_COLON, // '::'
     TOKEN_AMP,       // '&'
     TOKEN_ARROW,     // '->'
 

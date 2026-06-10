@@ -1,6 +1,6 @@
 CC = clang
 CFLAGS = -std=c11 -Wall -Wextra -Iinclude -g -D_GNU_SOURCE
-LDFLAGS = -ldl -lm
+LDFLAGS = -ldl -lm -rdynamic
 
 # Source files
 SRCS = src/main.c \
@@ -9,7 +9,8 @@ SRCS = src/main.c \
        src/parser.c \
        src/codegen/codegen.c \
        src/codegen/emitter.c \
-       src/codegen/arm64.c
+       src/codegen/arm64.c \
+       src/libs/os.c
 
 BIN = ncc
 

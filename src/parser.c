@@ -791,8 +791,38 @@ static ASTNode *parse_primary(void) {
 
 
     if (tok->type == TOKEN_IDENT) {
-        char *name = tok->value;
-        consume(TOKEN_IDENT, "Expected identifier");
+        char *name = NULL;
+        if (tok->next && tok->next->type == TOKEN_COLON_COLON) {
+            char *parts[100];
+            int part_count = 0;
+            parts[part_count++] = xstrdup(tok->value);
+            consume(TOKEN_IDENT, "Expected identifier");
+            
+            while (match(TOKEN_COLON_COLON)) {
+                if (tok->type != TOKEN_IDENT) {
+                    error_at("input", tok->line, tok->col, "Expected identifier after '::'");
+                }
+                parts[part_count++] = xstrdup(tok->value);
+                consume(TOKEN_IDENT, "Expected identifier");
+            }
+            
+            int total_len = 4; // _NC + null terminator
+            for (int i = 0; i < part_count; i++) {
+                total_len += 12 + strlen(parts[i]);
+            }
+            name = xmalloc(total_len);
+            sprintf(name, "_NC");
+            for (int i = 0; i < part_count; i++) {
+                char len_str[16];
+                sprintf(len_str, "%d", (int)strlen(parts[i]));
+                strcat(name, len_str);
+                strcat(name, parts[i]);
+                free(parts[i]);
+            }
+        } else {
+            name = xstrdup(tok->value);
+            consume(TOKEN_IDENT, "Expected identifier");
+        }
 
         // Function call?
         if (match(TOKEN_LPAREN)) {
@@ -1103,11 +1133,19 @@ static ASTNode *parse_function(void) {
 
 static ASTNode *parse_top_level(void) {
     if (match(TOKEN_IMPORT)) {
-        if (tok->type != TOKEN_STRING) error("Expected string after import");
-        char *path = tok->value;
-        consume(TOKEN_STRING, "Expected path");
-        consume(TOKEN_SEMI, "Expected ';'");
-        return new_ast_import(path);
+        if (tok->type == TOKEN_STRING) {
+            char *path = tok->value;
+            consume(TOKEN_STRING, "Expected path");
+            consume(TOKEN_SEMI, "Expected ';'");
+            return new_ast_import(path);
+        } else if (tok->type == TOKEN_IDENT) {
+            char *lib_name = tok->value;
+            consume(TOKEN_IDENT, "Expected identifier");
+            consume(TOKEN_SEMI, "Expected ';'");
+            return new_ast_import(lib_name);
+        } else {
+            error_at("input", tok->line, tok->col, "Expected string or identifier after import");
+        }
     }
 
     if (match(TOKEN_STRUCT)) {
